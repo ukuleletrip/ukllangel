@@ -23,9 +23,11 @@ import re
 import unicodedata
 from datetime import datetime, timedelta
 from tzimpl import JST, UTC
+from db import User, Watch, Drinking
 
 tz_jst = JST()
 tz_utc = UTC()
+
 usage = u'「xx時xx分から飲む」などとメッセージするとその時間の1、2、3時間後に飲み過ぎていないか確認するメッセージを送信します。\n途中で取り止めたい時、無事帰宅した時は「帰宅」や「やめ」とメッセージしてください。'
 welcome = u'ようこそ！大人飲みのためのLINE Botサービスです！\n?をメッセージすると使い方を返信します。'
 
@@ -46,7 +48,7 @@ class BotCallbackHandler(webapp2.RequestHandler):
         self.response.write(json.dumps({}))
 
 def receive_message(content):
-    msg = parse_message(content['text'])
+    msg = parse_message(content['from'], content['text'])
     if msg is None:
         msg = usage
     send_message(content['from'], msg)
@@ -84,7 +86,7 @@ def call_yahoo_jparser(msg):
     return BeautifulSoup(result.content.replace('\n',''), 'html.parser')
 
 
-def parse_message(msg):
+def parse_message(fm, msg):
     soup = call_yahoo_jparser(msg)
 
     # 1st, create parsed dict with key=id
@@ -162,6 +164,19 @@ def parse_message(msg):
                         day = int(mo.group(2))
                         s_date = s_date.replace(month=month, day=day)
                         break
+
+    # store data
+    watches = []
+    utc_s_date = s_date.astimezone(tz_utc).replace(tzinfo=None)
+    for i in range(3):
+        watches.append(Watch(date=utc_s_date+timedelta(hours=i+1)))
+
+    key = fm + s_date.strftime('%Y%m%d%H%M')
+    drinking = Drinking(id=key,
+                        mid=fm,
+                        start_date=utc_s_date,
+                        watches=watches)
+    drinking.put()
 
     return u'%d月%d日%d時%d分から飲むのですね！' % (s_date.month, s_date.day,
                                                     s_date.hour, s_date.minute)
