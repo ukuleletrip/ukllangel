@@ -1,5 +1,10 @@
 #! /usr/bin/env python
 # -*- coding:utf-8 -*-
+#
+# you have to install Beautifulsoup.
+# $ mkdir libs
+# $ pip install -t libs beautifulsoup4
+
 
 """Callback Handler from LINE Bot platform"""
 
@@ -22,6 +27,7 @@ from tzimpl import JST, UTC
 tz_jst = JST()
 tz_utc = UTC()
 usage = u'「xx時xx分から飲む」などとメッセージするとその時間の1、2、3時間後に飲み過ぎていないか確認するメッセージを送信します。\n途中で取り止めたい時、無事帰宅した時は「帰宅」や「やめ」とメッセージしてください。'
+welcome = u'ようこそ！大人飲みのためのLINE Botサービスです！\n?をメッセージすると使い方を返信します。'
 
 class BotCallbackHandler(webapp2.RequestHandler):
     def post(self):
@@ -29,14 +35,30 @@ class BotCallbackHandler(webapp2.RequestHandler):
         params = json.loads(self.request.body)
         logging.debug('kick from line server,\n %s' % (params['result']))
 
+        eventType = params['result'][0]['eventType']
         content = params['result'][0]['content']
+        if eventType == '138311609000106303':
+            # received message
+            receive_message(content)
+        elif eventType == '138311609100106403':
+            receive_operation(content)
 
-        msg = parse_message(content['text'])
-        if msg is None:
-            msg = usage
-        
-        send_message(content['from'], msg)
         self.response.write(json.dumps({}))
+
+def receive_message(content):
+    msg = parse_message(content['text'])
+    if msg is None:
+        msg = usage
+    send_message(content['from'], msg)
+
+def receive_operation(content):
+    opType = int(content['opType'])
+    if opType == 4:
+        # add as friend
+        send_message(content['params'][0], welcome)
+    elif opType == 8:
+        # block account
+        pass
 
 def depends_nomi(id, elms, nomi_id):
     elm = elms[id]
