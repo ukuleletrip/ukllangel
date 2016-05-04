@@ -168,6 +168,13 @@ def parse_message(fm, msg):
     # store data
     watches = []
     utc_s_date = s_date.astimezone(tz_utc).replace(tzinfo=None)
+
+    # check if s_date is valid
+    if utc_s_date < datetime.now():
+        # past date !!
+        return u'%d月%d日%d時%d分は過去です。' % (s_date.month, s_date.day,
+                                                        s_date.hour, s_date.minute)
+
     for i in range(3):
         watches.append(Watch(date=utc_s_date+timedelta(hours=i+1)))
 
