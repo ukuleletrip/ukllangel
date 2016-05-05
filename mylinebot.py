@@ -24,6 +24,7 @@ import unicodedata
 from datetime import datetime, timedelta
 from tzimpl import JST, UTC
 from db import User, Watch, Drinking
+import hmac, hashlib, base64
 
 tz_jst = JST()
 tz_utc = UTC()
@@ -36,16 +37,22 @@ class BotCallbackHandler(webapp2.RequestHandler):
         #params = json.loads(self.request.body.decode('utf-8'))
         params = json.loads(self.request.body)
         logging.debug('kick from line server,\n %s' % (params['result']))
-
-        eventType = params['result'][0]['eventType']
-        content = params['result'][0]['content']
-        if eventType == '138311609000106303':
-            # received message
-            receive_message(content)
-        elif eventType == '138311609100106403':
-            receive_operation(content)
+        if is_valid_signature(self.request):
+            eventType = params['result'][0]['eventType']
+            content = params['result'][0]['content']
+            if eventType == '138311609000106303':
+                # received message
+                receive_message(content)
+            elif eventType == '138311609100106403':
+                receive_operation(content)
 
         self.response.write(json.dumps({}))
+
+def is_valid_signature(request):
+    signature = base64.b64encode(hmac.new(APP_KEYS['line']['secret'],
+                                          request.body,
+                                          hashlib.sha256).digest())
+    return signature == request.headers.get('X-LINE-ChannelSignature')
 
 def receive_message(content):
     msg = parse_message(content['from'], content['text'])
@@ -173,7 +180,7 @@ def parse_message(fm, msg):
     if utc_s_date < datetime.now():
         # past date !!
         return u'%d月%d日%d時%d分は過去です。' % (s_date.month, s_date.day,
-                                                        s_date.hour, s_date.minute)
+                                                  s_date.hour, s_date.minute)
 
     for i in range(3):
         watches.append(Watch(date=utc_s_date+timedelta(hours=i+1)))
