@@ -16,13 +16,14 @@
 #
 import webapp2
 
-from mylinebot import BotCallbackHandler
+from mylinebot import BotCallbackHandler, WatchingHandler
 
 class MainHandler(webapp2.RequestHandler):
     def get(self):
         self.response.write('Hello world!')
 
 app = webapp2.WSGIApplication([
+    ('/admin/watching', WatchingHandler),
     ('/callback', BotCallbackHandler),
     ('/', MainHandler)
 ], debug=True)

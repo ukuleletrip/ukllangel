@@ -15,6 +15,7 @@ sys.path.insert(0, 'libs')
 from bs4 import BeautifulSoup
 import webapp2
 from google.appengine.api import urlfetch
+from google.appengine.api import memcache
 from urllib import urlencode
 import json
 import logging
@@ -48,32 +49,81 @@ class BotCallbackHandler(webapp2.RequestHandler):
 
         self.response.write(json.dumps({}))
 
+
+class WatchingHandler(webapp2.RequestHandler):
+    def get(self):
+        watches_to_send = {}
+        now = datetime.now()
+        query = Drinking.query(Drinking.watches.date <= now, Drinking.watches.is_replied == False)
+        drinkings_to_watch = query.fetch()
+        for drinking in drinkings_to_watch:
+            for i, watch in enumerate(drinking.watches):
+                if watch.is_replied == False and watch.date <= now:
+                    watches_to_send[drinking.mid] = { 'key' : drinking.key.id(), 'idx' : i }
+                    watch.sent_count += 1
+                    drinking.put()
+                    break
+
+        if len(watches_to_send):
+            send_watch_message(watches_to_send)
+
 def is_valid_signature(request):
     signature = base64.b64encode(hmac.new(APP_KEYS['line']['secret'],
                                           request.body,
                                           hashlib.sha256).digest())
     return signature == request.headers.get('X-LINE-ChannelSignature')
 
+def has_drinking(mid):
+    query = Drinking.query(Drinking.mid == mid)
+    drinkings = query.fetch()
+    return len(drinkings) > 0
+
 def is_duplicated_drinking(key):
     drinking = Drinking.get_key(key).get()
     return drinking != None
 
+def send_watch_message(watches):
+    for mid, value in watches.items():
+        # store sent mids for receiving replies
+        logging.debug(value)
+        memcache.add(mid, value, 60*5)
+        
+    send_message(watches.keys(), u'楽しんでいますか？どのくらい飲みましたか？返信してくださいね！')
+
+def cancel_drinking(mid):
+    query = Drinking.query(Drinking.mid == mid, Drinking.is_done == False)
+    drinkings = query.fetch(keys_only=True)
+    if len(drinkings) == 0:
+        return u'予約された飲みはありません'
+
+    # delete drinking entry
+    Drinking.delete_drinkings(drinkings)
+    return u'予約された飲みをキャンセルしました'
+
 def receive_message(content):
-    msg = parse_message(content['from'], content['text'])
-    if msg is None:
-        msg = usage
-    send_message(content['from'], msg)
+    watch_info = memcache.get(content['from'])
+    if watch_info is not None:
+        # we think it is reply...
+        memcache.delete(content['from'])
+        msg = parse_reply(content['from'], content['text'], watch_info)
+    else:
+        msg = parse_message(content['from'], content['text'])
+        if msg is None:
+            msg = usage
+
+    if msg:
+        send_message([content['from']], msg)
 
 def receive_operation(content):
     opType = int(content['opType'])
     if opType == 4:
         # add as friend
-        send_message(content['params'][0], welcome)
+        send_message([content['params'][0]], welcome)
     elif opType == 8:
         # block account
         pass
 
-def depends_nomi(id, elms, nomi_id):
+def depends_drink(id, elms, nomi_id):
     elm = elms[id]
     while elm['dependency'] >= 0:
         if elm['dependency'] == nomi_id:
@@ -97,7 +147,7 @@ def call_yahoo_jparser(msg):
     return BeautifulSoup(result.content.replace('\n',''), 'html.parser')
 
 
-def parse_message(fm, msg):
+def parse_message(mid, msg):
     soup = call_yahoo_jparser(msg)
 
     # 1st, create parsed dict with key=id
@@ -111,27 +161,39 @@ def parse_message(fm, msg):
             elm['morphemlist'].append({ 'surface':morphem.surface.text,
                                         'pos'    :morphem.pos.text })
 
-    # 2nd, find nomi morphem
-    nomi_id = -1
+    # 2nd, find drink or cancel morphem
+    drink_id = -1
+    cancel_id = -1
     for id, elm in elms.items():
         for morphem in elm['morphemlist']:
             if morphem['pos'] == u'動詞':
                 mo = re.search(u'(飲|呑|の)(み|む)', morphem['surface'])
                 if mo:
-                    nomi_id = id
+                    drink_id = id
+                    break
+                elif morphem['surface'].find(u'やめ') >= 0:
+                    cancel_id = id
                     break
         else:
             continue
         break
 
-    if nomi_id == -1:
+    if cancel_id >= 0:
+        # this is cancel message
+        return cancel_drinking(mid)
+
+    if drink_id == -1:
         # this is not nomi message...
         return None
+
+    # user can have only one drink
+    if has_drinking(mid):
+        return u'飲みは1つしか予約できません。予約した飲みをキャンセルするには「やめ」とメッセージしてください。'
 
     # 3rd, determine date and time
     s_date = datetime.now(tz=tz_jst).replace(second=0, microsecond=0)
     for id, elm in elms.items():
-        if depends_nomi(id, elms, nomi_id):
+        if depends_drink(id, elms, drink_id):
             start_info = ''
             for morphem in elm['morphemlist']:
                 start_info += morphem['surface']
@@ -187,26 +249,40 @@ def parse_message(fm, msg):
         return s_date_str + u'は過去です。'
 
     # check duplicate
-    key = fm + s_date.strftime('%Y%m%d%H%M')
+    key = mid + s_date.strftime('%Y%m%d%H%M')
     if is_duplicated_drinking(key):
         return s_date_str + u'からの飲みは登録済みです。'
 
-    for i in range(3):
-        watches.append(Watch(date=utc_s_date+timedelta(hours=i+1)))
+    watch_counts = 3
+    watch_interval = 5
+    for i in range(watch_counts):
+        watches.append(Watch(date=utc_s_date+timedelta(minutes=watch_interval*i+1)))
 
     drinking = Drinking(id=key,
-                        mid=fm,
+                        mid=mid,
                         start_date=utc_s_date,
                         watches=watches)
     drinking.put()
 
-    return s_date_str + u'から飲むのですね！'
+    return s_date_str + u'から飲むのですね！\n約%d分毎に%d回メッセージを送信しますので、何を何杯飲んだかなど、状況を返信してくださいね。' % (watch_interval, watch_counts)
 
+def parse_reply(mid, text, watch_info):
+    drinking = Drinking.get_key(watch_info['key']).get()
+    if drinking:
+        drinking.watches[watch_info['idx']].reply = text
+        drinking.watches[watch_info['idx']].is_replied = True
+        drinking.put()
+        return u'引き続き大人飲みでいきましょう！'
+    else:
+        return None
 
-def send_message(to, text):
+def send_message(mids, text):
+    if len(mids) == 0:
+        return
+        
     url = 'https://trialbot-api.line.me/v1/events'
     params = {
-        'to': [ to ],
+        'to': mids,
         'toChannel': 1383378250,
         'eventType': '138311608800106203',
         'content' : {

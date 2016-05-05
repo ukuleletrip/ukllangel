@@ -27,3 +27,7 @@ class Drinking(ndb.Model):
     @staticmethod
     def get_key(key):
         return ndb.Key(Drinking, key)
+
+    @staticmethod
+    def delete_drinkings(drinkings):
+        ndb.delete_multi(drinkings)

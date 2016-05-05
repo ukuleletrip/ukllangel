@@ -1,0 +1,4 @@
+cron:
+- description: "watching drinking."
+  url: /admin/watching
+  schedule: every 5 mins
