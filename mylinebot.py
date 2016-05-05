@@ -54,6 +54,10 @@ def is_valid_signature(request):
                                           hashlib.sha256).digest())
     return signature == request.headers.get('X-LINE-ChannelSignature')
 
+def is_duplicated_drinking(key):
+    drinking = Drinking.get_key(key).get()
+    return drinking != None
+
 def receive_message(content):
     msg = parse_message(content['from'], content['text'])
     if msg is None:
@@ -175,25 +179,28 @@ def parse_message(fm, msg):
     # store data
     watches = []
     utc_s_date = s_date.astimezone(tz_utc).replace(tzinfo=None)
+    s_date_str = u'%d月%d日%d時%d分' % (s_date.month, s_date.day, s_date.hour, s_date.minute)
 
     # check if s_date is valid
     if utc_s_date < datetime.now():
         # past date !!
-        return u'%d月%d日%d時%d分は過去です。' % (s_date.month, s_date.day,
-                                                  s_date.hour, s_date.minute)
+        return s_date_str + u'は過去です。'
+
+    # check duplicate
+    key = fm + s_date.strftime('%Y%m%d%H%M')
+    if is_duplicated_drinking(key):
+        return s_date_str + u'からの飲みは登録済みです。'
 
     for i in range(3):
         watches.append(Watch(date=utc_s_date+timedelta(hours=i+1)))
 
-    key = fm + s_date.strftime('%Y%m%d%H%M')
     drinking = Drinking(id=key,
                         mid=fm,
                         start_date=utc_s_date,
                         watches=watches)
     drinking.put()
 
-    return u'%d月%d日%d時%d分から飲むのですね！' % (s_date.month, s_date.day,
-                                                    s_date.hour, s_date.minute)
+    return s_date_str + u'から飲むのですね！'
 
 
 def send_message(to, text):

@@ -23,3 +23,7 @@ class Drinking(ndb.Model):
     is_done = ndb.BooleanProperty(required=True, default=False)
     result = ndb.StringProperty()
     watches = ndb.StructuredProperty(Watch, repeated=True)
+
+    @staticmethod
+    def get_key(key):
+        return ndb.Key(Drinking, key)
