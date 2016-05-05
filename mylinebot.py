@@ -27,6 +27,12 @@ from tzimpl import JST, UTC
 from db import User, Watch, Drinking
 import hmac, hashlib, base64
 
+WATCH_COUNTS = 3
+WATCH_INTERVAL = 5
+WATCH_TIMEOUT = 10
+WATCH_REPLY_TIMEOUT = 5
+
+
 tz_jst = JST()
 tz_utc = UTC()
 
@@ -54,11 +60,13 @@ class WatchingHandler(webapp2.RequestHandler):
     def get(self):
         watches_to_send = {}
         now = datetime.now()
-        query = Drinking.query(Drinking.watches.date <= now, Drinking.watches.is_replied == False)
+        query = Drinking.query(Drinking.is_done == False,
+                               Drinking.watches.date <= now, Drinking.watches.is_replied == False)
         drinkings_to_watch = query.fetch()
         for drinking in drinkings_to_watch:
             for i, watch in enumerate(drinking.watches):
-                if watch.is_replied == False and watch.date <= now:
+                if watch.is_replied == False and \
+                   (watch.date <= now and now <= watch.date+timedelta(minutes=WATCH_TIMEOUT)):
                     watches_to_send[drinking.mid] = { 'key' : drinking.key.id(), 'idx' : i }
                     watch.sent_count += 1
                     drinking.put()
@@ -67,6 +75,7 @@ class WatchingHandler(webapp2.RequestHandler):
         if len(watches_to_send):
             send_watch_message(watches_to_send)
 
+
 def is_valid_signature(request):
     signature = base64.b64encode(hmac.new(APP_KEYS['line']['secret'],
                                           request.body,
@@ -74,7 +83,7 @@ def is_valid_signature(request):
     return signature == request.headers.get('X-LINE-ChannelSignature')
 
 def has_drinking(mid):
-    query = Drinking.query(Drinking.mid == mid)
+    query = Drinking.query(Drinking.mid == mid, Drinking.is_done == False)
     drinkings = query.fetch()
     return len(drinkings) > 0
 
@@ -85,8 +94,7 @@ def is_duplicated_drinking(key):
 def send_watch_message(watches):
     for mid, value in watches.items():
         # store sent mids for receiving replies
-        logging.debug(value)
-        memcache.add(mid, value, 60*5)
+        memcache.add(mid, value, WATCH_REPLY_TIMEOUT*60)
         
     send_message(watches.keys(), u'楽しんでいますか？どのくらい飲みましたか？返信してくださいね！')
 
@@ -253,10 +261,8 @@ def parse_message(mid, msg):
     if is_duplicated_drinking(key):
         return s_date_str + u'からの飲みは登録済みです。'
 
-    watch_counts = 3
-    watch_interval = 5
-    for i in range(watch_counts):
-        watches.append(Watch(date=utc_s_date+timedelta(minutes=watch_interval*i+1)))
+    for i in range(WATCH_COUNTS):
+        watches.append(Watch(date=utc_s_date+timedelta(minutes=WATCH_INTERVAL*(i+1))))
 
     drinking = Drinking(id=key,
                         mid=mid,
@@ -264,15 +270,22 @@ def parse_message(mid, msg):
                         watches=watches)
     drinking.put()
 
-    return s_date_str + u'から飲むのですね！\n約%d分毎に%d回メッセージを送信しますので、何を何杯飲んだかなど、状況を返信してくださいね。' % (watch_interval, watch_counts)
+    return s_date_str + u'から飲むのですね！\n約%d分毎に%d回メッセージを送信しますので、何を何杯飲んだかなど、状況を返信してくださいね。' % (WATCH_INTERVAL, WATCH_COUNTS)
 
 def parse_reply(mid, text, watch_info):
     drinking = Drinking.get_key(watch_info['key']).get()
     if drinking:
         drinking.watches[watch_info['idx']].reply = text
         drinking.watches[watch_info['idx']].is_replied = True
+        if watch_info['idx'] == WATCH_COUNTS-1 or \
+           (text.find(u'帰宅') >= 0 or text.find(u'終') >= 0):
+            # it is last watch
+            drinking.is_done = True
+            msg = u'お疲れさまでした！'
+        else:
+            msg = u'引き続き大人飲みでいきましょう！'
         drinking.put()
-        return u'引き続き大人飲みでいきましょう！'
+        return msg
     else:
         return None
 
