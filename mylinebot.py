@@ -13,7 +13,6 @@ __author__ = 'ukuleletrip@gmail.com (Ukulele Trip)'
 import sys
 sys.path.insert(0, 'libs')
 from bs4 import BeautifulSoup
-import webapp2
 from google.appengine.api import urlfetch
 from google.appengine.api import memcache
 from urllib import urlencode
@@ -25,62 +24,55 @@ import unicodedata
 from datetime import datetime, timedelta
 from tzimpl import JST, UTC
 from db import User, Watch, Drinking
-import hmac, hashlib, base64
+import os
 
 WATCH_COUNTS = 3
 WATCH_INTERVAL = 5
 WATCH_TIMEOUT = 10
 WATCH_REPLY_TIMEOUT = 5
+WATCH_RESULT_TIMEOUT = 12*60
 
+STAT_NONE = 0
+STAT_WAIT_REPLY = 1
+STAT_WAIT_RESULT = 2
 
 tz_jst = JST()
 tz_utc = UTC()
 
-usage = u'「xx時xx分から飲む」などとメッセージするとその時間の1、2、3時間後に飲み過ぎていないか確認するメッセージを送信します。\n途中で取り止めたい時、無事帰宅した時は「帰宅」や「やめ」とメッセージしてください。'
+usage = u'「xx時xx分から飲む」などとメッセージするとその時間の1、2、3時間後に飲み過ぎていないか確認するメッセージを送信します。\n途中で止めたい時、無事帰宅した時は「帰宅」や「やめ」とメッセージしてください。'
 welcome = u'ようこそ！大人飲みのためのLINE Botサービスです！\n?をメッセージすると使い方を返信します。'
 
-class BotCallbackHandler(webapp2.RequestHandler):
-    def post(self):
-        #params = json.loads(self.request.body.decode('utf-8'))
-        params = json.loads(self.request.body)
-        logging.debug('kick from line server,\n %s' % (params['result']))
-        if is_valid_signature(self.request):
-            eventType = params['result'][0]['eventType']
-            content = params['result'][0]['content']
-            if eventType == '138311609000106303':
-                # received message
-                receive_message(content)
-            elif eventType == '138311609100106403':
-                receive_operation(content)
+def watch_drinkings():
+    watches_to_send = {}
+    now = datetime.now(tz=tz_utc).replace(tzinfo=None)
+    query = Drinking.query(Drinking.is_done == False,
+                           Drinking.watches.date <= now, Drinking.watches.is_replied == False)
+    drinkings_to_watch = query.fetch()
+    for drinking in drinkings_to_watch:
+        for i, watch in enumerate(drinking.watches):
+            if watch.is_replied == False and \
+               (watch.date <= now and now <= watch.date+timedelta(minutes=WATCH_TIMEOUT)):
+                watches_to_send[drinking.mid] = { 'key' : drinking.key.id(), 'idx' : i }
+                watch.sent_count += 1
+                drinking.put()
+                break
 
-        self.response.write(json.dumps({}))
+    if len(watches_to_send):
+        send_watch_message(watches_to_send)
 
+def check_result():
+    req_to_send = {}
+    yesterday = (datetime.now(tz=tz_utc)+timedelta(days=-1)) \
+                .replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+    query = Drinking.query(Drinking.start_date >= yesterday,
+                           Drinking.start_date < yesterday+timedelta(days=1),
+                           Drinking.result == None)
+    drinkings_to_req = query.fetch()
+    for drinking in drinkings_to_req:
+        req_to_send[drinking.mid] = { 'key' : drinking.key.id(), 'result' : True }
 
-class WatchingHandler(webapp2.RequestHandler):
-    def get(self):
-        watches_to_send = {}
-        now = datetime.now()
-        query = Drinking.query(Drinking.is_done == False,
-                               Drinking.watches.date <= now, Drinking.watches.is_replied == False)
-        drinkings_to_watch = query.fetch()
-        for drinking in drinkings_to_watch:
-            for i, watch in enumerate(drinking.watches):
-                if watch.is_replied == False and \
-                   (watch.date <= now and now <= watch.date+timedelta(minutes=WATCH_TIMEOUT)):
-                    watches_to_send[drinking.mid] = { 'key' : drinking.key.id(), 'idx' : i }
-                    watch.sent_count += 1
-                    drinking.put()
-                    break
-
-        if len(watches_to_send):
-            send_watch_message(watches_to_send)
-
-
-def is_valid_signature(request):
-    signature = base64.b64encode(hmac.new(APP_KEYS['line']['secret'],
-                                          request.body,
-                                          hashlib.sha256).digest())
-    return signature == request.headers.get('X-LINE-ChannelSignature')
+    if len(req_to_send):
+        send_request_message(req_to_send)
 
 def has_drinking(mid):
     query = Drinking.query(Drinking.mid == mid, Drinking.is_done == False)
@@ -90,6 +82,13 @@ def has_drinking(mid):
 def is_duplicated_drinking(key):
     drinking = Drinking.get_key(key).get()
     return drinking != None
+
+def send_request_message(reqs):
+    for mid, value in reqs.items():
+        # store sent mids for receiving result
+        memcache.add(mid, value, WATCH_RESULT_TIMEOUT*60)
+        
+    send_message(reqs.keys(), u'昨日はお疲れさまでした。今日の様子はいかがですか？返信してくださいね！')
 
 def send_watch_message(watches):
     for mid, value in watches.items():
@@ -108,12 +107,26 @@ def cancel_drinking(mid):
     Drinking.delete_drinkings(drinkings)
     return u'予約された飲みをキャンセルしました'
 
+def get_status(mid, is_peek=False):
+    info = memcache.get(mid)
+    if info is None:
+        return (STAT_NONE, None)
+    else:
+        if is_peek == False:
+            memcache.delete(mid)
+
+        if 'result' in info:
+            return (STAT_WAIT_RESULT, info)
+        else:
+            return (STAT_WAIT_REPLY, info)
+
 def receive_message(content):
-    watch_info = memcache.get(content['from'])
-    if watch_info is not None:
+    (status, info) = get_status(content['from'])
+    if status == STAT_WAIT_REPLY:
         # we think it is reply...
-        memcache.delete(content['from'])
-        msg = parse_reply(content['from'], content['text'], watch_info)
+        msg = parse_reply(content['from'], content['text'], info)
+    elif status == STAT_WAIT_RESULT:
+        msg = parse_result(content['from'], content['text'], info)
     else:
         msg = parse_message(content['from'], content['text'])
         if msg is None:
@@ -252,7 +265,7 @@ def parse_message(mid, msg):
     s_date_str = u'%d月%d日%d時%d分' % (s_date.month, s_date.day, s_date.hour, s_date.minute)
 
     # check if s_date is valid
-    if utc_s_date < datetime.now():
+    if utc_s_date < datetime.now(tz=tz_utc).replace(tzinfo=None):
         # past date !!
         return s_date_str + u'は過去です。'
 
@@ -272,6 +285,15 @@ def parse_message(mid, msg):
 
     return s_date_str + u'から飲むのですね！\n約%d分毎に%d回メッセージを送信しますので、何を何杯飲んだかなど、状況を返信してくださいね。' % (WATCH_INTERVAL, WATCH_COUNTS)
 
+def parse_result(mid, text, info):
+    drinking = Drinking.get_key(info['key']).get()
+    if drinking:
+        drinking.result = text
+        drinking.put()
+        return u'次回も大人飲みのお手伝いをします。またメッセージくださいね！'
+    else:
+        return None
+
 def parse_reply(mid, text, watch_info):
     drinking = Drinking.get_key(watch_info['key']).get()
     if drinking:
@@ -290,6 +312,11 @@ def parse_reply(mid, text, watch_info):
         return None
 
 def send_message(mids, text):
+    if 'SERVER_SOFTWARE' not in os.environ or \
+       os.environ['SERVER_SOFTWARE'].find('testbed') >= 0:
+        # I'm not running on server
+        return
+
     if len(mids) == 0:
         return
         
@@ -321,3 +348,4 @@ def send_message(mids, text):
         logging.debug(result.content)
     else:
         logging.error(result.content)
+

@@ -15,12 +15,13 @@
 # limitations under the License.
 #
 import webapp2
+import os
 
-from mylinebot import BotCallbackHandler, WatchingHandler
+from mylinebot_handler import BotCallbackHandler, WatchingHandler
 
 class MainHandler(webapp2.RequestHandler):
     def get(self):
-        self.response.write('Hello world!')
+        self.response.write(os.environ['SERVER_SOFTWARE'])
 
 app = webapp2.WSGIApplication([
     ('/admin/watching', WatchingHandler),
