@@ -2,3 +2,7 @@ cron:
 - description: "watching drinking."
   url: /admin/watching
   schedule: every 5 mins
+
+- description: "requesting result."
+  url: /admin/reqresult
+  schedule: every day 12:02
