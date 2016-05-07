@@ -5,4 +5,4 @@ cron:
 
 - description: "requesting result."
   url: /admin/reqresult
-  schedule: every day 12:02
+  schedule: every day 03:03

@@ -27,9 +27,9 @@ from db import User, Watch, Drinking
 import os
 
 WATCH_COUNTS = 3
-WATCH_INTERVAL = 5
+WATCH_INTERVAL = 60
 WATCH_TIMEOUT = 10
-WATCH_REPLY_TIMEOUT = 5
+WATCH_REPLY_TIMEOUT = 60
 WATCH_RESULT_TIMEOUT = 12*60
 
 STAT_NONE = 0
@@ -122,6 +122,7 @@ def get_status(mid, is_peek=False):
 
 def receive_message(content):
     (status, info) = get_status(content['from'])
+    logging.debug('status: %d' % (status))
     if status == STAT_WAIT_REPLY:
         # we think it is reply...
         msg = parse_reply(content['from'], content['text'], info)
