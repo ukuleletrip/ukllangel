@@ -34,8 +34,8 @@ RESULT_TIMEOUT = 12*60   # 12 hour
 tz_jst = JST()
 tz_utc = UTC()
 
-usage = u'「xx時xx分から飲む」などとメッセージするとその時間の1、2、3時間後に飲み過ぎていないか確認するメッセージを送信します。\n途中で止めたい時、無事帰宅した時は「帰宅」や「やめ」とメッセージしてください。'
-welcome = u'ようこそ！大人飲みのためのLINE Botサービスです！\n?をメッセージすると使い方を返信します。'
+usage = u'大人飲みのお手伝いをします！使い方は https://ukllangel.appspot.com/help を参照してください。'
+welcome = usage
 
 def watch_drinkings():
     watches_to_send = {}
