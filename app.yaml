@@ -13,6 +13,10 @@ handlers:
   script: main.app
   login: admin
 
+- url: /help
+  static_files: help/index.html
+  upload: help/index.html
+
 - url: .*
   script: main.app
 
