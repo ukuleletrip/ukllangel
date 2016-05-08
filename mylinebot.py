@@ -14,7 +14,6 @@ import sys
 sys.path.insert(0, 'libs')
 from bs4 import BeautifulSoup
 from google.appengine.api import urlfetch
-from google.appengine.api import memcache
 from urllib import urlencode
 import json
 import logging
@@ -29,12 +28,8 @@ import os
 WATCH_COUNTS = 3
 WATCH_INTERVAL = 60
 WATCH_TIMEOUT = 10
-WATCH_REPLY_TIMEOUT = 60
-WATCH_RESULT_TIMEOUT = 12*60
-
-STAT_NONE = 0
-STAT_WAIT_REPLY = 1
-STAT_WAIT_RESULT = 2
+WATCH_REPLY_TIMEOUT = 60 # 60 min
+RESULT_TIMEOUT = 12*60   # 12 hour
 
 tz_jst = JST()
 tz_utc = UTC()
@@ -70,6 +65,9 @@ def check_result():
     drinkings_to_req = query.fetch()
     for drinking in drinkings_to_req:
         req_to_send[drinking.mid] = { 'key' : drinking.key.id(), 'result' : True }
+        if drinking.is_done == False:
+            drinking.is_done = True
+            drinking.put()
 
     if len(req_to_send):
         send_request_message(req_to_send)
@@ -83,17 +81,39 @@ def is_duplicated_drinking(key):
     drinking = Drinking.get_key(key).get()
     return drinking != None
 
+def create_user(mid):
+    user = User(id=mid)
+    return user.put()
+
 def send_request_message(reqs):
     for mid, value in reqs.items():
         # store sent mids for receiving result
-        memcache.add(mid, value, WATCH_RESULT_TIMEOUT*60)
+        user = User.get_key(mid).get()
+        if user is None:
+            key = create_user(mid)
+            user = key.get()
+
+        user.status = User.STAT_WAIT_RESULT
+        user.status_info = value
+        user.status_expire = (datetime.now(tz=tz_utc)+timedelta(seconds=RESULT_TIMEOUT*60)) \
+                              .replace(tzinfo=None)
+        user.put()
         
     send_message(reqs.keys(), u'昨日はお疲れさまでした。今日の様子はいかがですか？返信してくださいね！')
 
 def send_watch_message(watches):
     for mid, value in watches.items():
         # store sent mids for receiving replies
-        memcache.add(mid, value, WATCH_REPLY_TIMEOUT*60)
+        user = User.get_key(mid).get()
+        if user is None:
+            key = create_user(mid)
+            user = key.get()
+
+        user.status = User.STAT_WAIT_REPLY
+        user.status_info = value
+        user.status_expire = (datetime.now(tz=tz_utc)+timedelta(seconds=WATCH_REPLY_TIMEOUT*60)) \
+                              .replace(tzinfo=None)
+        user.put()
         
     send_message(watches.keys(), u'楽しんでいますか？どのくらい飲みましたか？返信してくださいね！')
 
@@ -107,29 +127,51 @@ def cancel_drinking(mid):
     Drinking.delete_drinkings(drinkings)
     return u'予約された飲みをキャンセルしました'
 
-def get_status(mid, is_peek=False):
-    info = memcache.get(mid)
-    if info is None:
-        return (STAT_NONE, None)
-    else:
-        if is_peek == False:
-            memcache.delete(mid)
+def finish_the_drinkig(drinking):
+    drinking.is_done = True
+    drinking.finished_date = datetime.now(tz=tz_utc).replace(tzinfo=None)
+    drinking.put()
+    return u'お疲れさまでした！'
 
-        if 'result' in info:
-            return (STAT_WAIT_RESULT, info)
-        else:
-            return (STAT_WAIT_REPLY, info)
+def finish_drinking(mid):
+    query = Drinking.query(Drinking.mid == mid, Drinking.is_done == False)
+    drinkings = query.fetch(1)
+    if drinkings == None:
+        return u'すでに帰宅されているようです'
+
+    # finish the drinking
+    return finish_the_drinkig(drinkings[0])
+
+def get_status(mid, is_peek=False):
+    now = datetime.now(tz=tz_utc).replace(tzinfo=None)
+    user = User.get_key(mid).get()
+    if user is None or user.status == User.STAT_NONE:
+        return (User.STAT_NONE, None)
+    else:
+        status = user.status
+        expire = user.status_expire
+        info = user.status_info
+
+        if is_peek == False:
+            user.status = User.STAT_NONE
+            user.put()
+
+        if expire < now:
+            # expired
+            return (User.STAT_NONE, None)
+
+        return (status, info)
 
 def receive_message(content):
     (status, info) = get_status(content['from'])
     logging.debug('status: %d' % (status))
-    if status == STAT_WAIT_REPLY:
+    if status == User.STAT_WAIT_REPLY:
         # we think it is reply...
-        msg = parse_reply(content['from'], content['text'], info)
-    elif status == STAT_WAIT_RESULT:
-        msg = parse_result(content['from'], content['text'], info)
+        msg = handle_reply(content['from'], content['text'], info)
+    elif status == User.STAT_WAIT_RESULT:
+        msg = handle_result(content['from'], content['text'], info)
     else:
-        msg = parse_message(content['from'], content['text'])
+        msg = handle_message(content['from'], content['text'])
         if msg is None:
             msg = usage
 
@@ -169,7 +211,7 @@ def call_yahoo_jparser(msg):
     return BeautifulSoup(result.content.replace('\n',''), 'html.parser')
 
 
-def parse_message(mid, msg):
+def parse_message(msg):
     soup = call_yahoo_jparser(msg)
 
     # 1st, create parsed dict with key=id
@@ -186,9 +228,12 @@ def parse_message(mid, msg):
     # 2nd, find drink or cancel morphem
     drink_id = -1
     cancel_id = -1
+    finished_id = -1
+    # I'm not sure that I have to use Yahoo API...
+    # I just wanted to use that !!!
     for id, elm in elms.items():
         for morphem in elm['morphemlist']:
-            if morphem['pos'] == u'動詞':
+            if morphem['pos'] == u'動詞' or morphem['pos'] == u'名詞':
                 mo = re.search(u'(飲|呑|の)(み|む)', morphem['surface'])
                 if mo:
                     drink_id = id
@@ -196,9 +241,22 @@ def parse_message(mid, msg):
                 elif morphem['surface'].find(u'やめ') >= 0:
                     cancel_id = id
                     break
+                elif (morphem['surface'].find(u'終') >= 0 or
+                      morphem['surface'].find(u'帰') >= 0):
+                    finished_id = id
+                    break
         else:
             continue
         break
+
+    return (elms, drink_id, cancel_id, finished_id)
+
+def handle_message(mid, msg):
+    (elms, drink_id, cancel_id, finished_id) = parse_message(msg)
+
+    if finished_id >= 0:
+        # this is finish message
+        return finish_drinking(mid)
 
     if cancel_id >= 0:
         # this is cancel message
@@ -286,7 +344,7 @@ def parse_message(mid, msg):
 
     return s_date_str + u'から飲むのですね！\n約%d分毎に%d回メッセージを送信しますので、何を何杯飲んだかなど、状況を返信してくださいね。' % (WATCH_INTERVAL, WATCH_COUNTS)
 
-def parse_result(mid, text, info):
+def handle_result(mid, text, info):
     drinking = Drinking.get_key(info['key']).get()
     if drinking:
         drinking.result = text
@@ -295,7 +353,7 @@ def parse_result(mid, text, info):
     else:
         return None
 
-def parse_reply(mid, text, watch_info):
+def handle_reply(mid, text, watch_info):
     drinking = Drinking.get_key(watch_info['key']).get()
     if drinking:
         drinking.watches[watch_info['idx']].reply = text
@@ -303,11 +361,10 @@ def parse_reply(mid, text, watch_info):
         if watch_info['idx'] == WATCH_COUNTS-1 or \
            (text.find(u'帰宅') >= 0 or text.find(u'終') >= 0):
             # it is last watch
-            drinking.is_done = True
-            msg = u'お疲れさまでした！'
+            msg = finish_the_drinkig(drinking)
         else:
             msg = u'引き続き大人飲みでいきましょう！'
-        drinking.put()
+            drinking.put()
         return msg
     else:
         return None

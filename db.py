@@ -3,10 +3,19 @@
 from google.appengine.ext import ndb
 
 class User(ndb.Model):
+    STAT_NONE = 0
+    STAT_WAIT_REPLY = 1
+    STAT_WAIT_RESULT = 2
+
     version = ndb.IntegerProperty(required=True, default=1)
-    mid = ndb.StringProperty(required=True)
-    worst_drinking = ndb.StringProperty()
+    status = ndb.IntegerProperty(required=True, default=STAT_NONE)
+    status_info = ndb.JsonProperty()
+    status_expire = ndb.DateTimeProperty()
     
+    @staticmethod
+    def get_key(mid):
+        return ndb.Key(User, mid)
+
 
 class Watch(ndb.Model):
     version = ndb.IntegerProperty(required=True, default=1)
@@ -21,6 +30,7 @@ class Drinking(ndb.Model):
     mid = ndb.StringProperty(required=True)
     start_date = ndb.DateTimeProperty(required=True)
     is_done = ndb.BooleanProperty(required=True, default=False)
+    finished_date = ndb.DateTimeProperty()
     result = ndb.StringProperty()
     watches = ndb.StructuredProperty(Watch, repeated=True)
 

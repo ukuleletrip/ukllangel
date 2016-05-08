@@ -6,12 +6,11 @@ sys.path.insert(1, '/usr/local/google_appengine')
 sys.path.insert(1, '/usr/local/google_appengine/lib/yaml/lib')
 
 import unittest
-from google.appengine.api import memcache
 from google.appengine.ext import ndb
 from google.appengine.ext import testbed
 
 from mylinebot import *
-from db import Drinking, Watch
+from db import Drinking, Watch, User
 from datetime import datetime, timedelta
 from tzimpl import JST, UTC
 from time import sleep
@@ -53,6 +52,9 @@ class MyLineBotTestCase(unittest.TestCase):
         test_patterns.append({ 'date'  : now,
                                'msg'   : u'%02d%02dから呑む' % (now.hour, now.minute),
                                'msgpm' : u'%02d%02dPMからのむ' % (now.hour%12, now.minute)})
+        test_patterns.append({ 'date'  : now,
+                               'msg'   : u'%02d%02dから飲み会' % (now.hour, now.minute),
+                               'msgpm' : u'%02d%02dPMから呑み会' % (now.hour%12, now.minute)})
         now2 = (now+timedelta(hours=1)).replace(minute=0)
         test_patterns.append({ 'date'  : now2,
                                'msg'   : u'%d時から飲む' % (now2.hour),
@@ -61,12 +63,16 @@ class MyLineBotTestCase(unittest.TestCase):
         for test in test_patterns:
             dt = test['date']
 
-            msg = parse_message('test', test['msg'])
+            msg = handle_message('test', test['msg'])
+            if msg is None:
+                msg = u''
             c_msg = u'%d月%d日%d時%d分から飲むのですね' % (dt.month, dt.day, dt.hour, dt.minute)
             self.assertTrue(msg.startswith(c_msg), msg + '\n' + c_msg)
             cancel_drinking('test')
 
-            msg = parse_message('test', test['msgpm'])
+            msg = handle_message('test', test['msgpm'])
+            if msg is None:
+                msg = u''
             c_msg = u'%d月%d日%d時%d分から飲むのですね' % \
                     (dt.month, dt.day, dt.hour if dt.hour >=12 else dt.hour+12, dt.minute)
             self.assertTrue(msg.startswith(c_msg), msg + '\n' + c_msg)
@@ -76,15 +82,15 @@ class MyLineBotTestCase(unittest.TestCase):
     def testPastDrinking(self):
         now = datetime.now()+timedelta(minutes=-5)
         msg = u'%02d%02dから飲む' % (now.hour, now.minute)
-        msg = parse_message('test', msg)
+        msg = handle_message('test', msg)
         self.assertTrue(msg.find(u'は過去です')>=0, msg)
 
 
     def testDuplicatedDrinking(self):
         now = datetime.now()+timedelta(minutes=5)
         msg = u'%02d%02dから飲む' % (now.hour, now.minute)
-        parse_message('test', msg)
-        msg = parse_message('test', msg)
+        handle_message('test', msg)
+        msg = handle_message('test', msg)
         self.assertTrue(msg.find(u'飲みは1つしか予約できません')>=0, msg)
 
 
@@ -108,8 +114,8 @@ class MyLineBotTestCase(unittest.TestCase):
             sleep(TEST_INTERVAL)
 
             watch_drinkings()
-            (status, info) = get_status(test_id, True)
-            self.assertEqual(status, STAT_WAIT_REPLY)
+            (status, info) = get_status(test_id, is_peek=True)
+            self.assertEqual(status, User.STAT_WAIT_REPLY)
             self.assertTrue(info is not None)
             self.assertEqual(info['key'], test_id, info['key'])
             self.assertEqual(info['idx'], i, info['idx'])
@@ -122,7 +128,7 @@ class MyLineBotTestCase(unittest.TestCase):
             content = { 'from' : test_id, 'text' : 'OK' }
             receive_message(content)
             (status, info) = get_status(test_id)
-            self.assertEqual(status, STAT_NONE)
+            self.assertEqual(status, User.STAT_NONE)
             drinking = Drinking.get_key(test_id).get()
             for j, watch in enumerate(drinking.watches):
                 self.assertEqual(watch.is_replied, True if j <= i else False)
@@ -151,7 +157,7 @@ class MyLineBotTestCase(unittest.TestCase):
         for i in range(5):
             watch_drinkings()
             (status, info) = get_status(test_id, True)
-            self.assertEqual(status, STAT_WAIT_REPLY)
+            self.assertEqual(status, User.STAT_WAIT_REPLY)
             self.assertTrue(info is not None)
             self.assertEqual(info['key'], test_id, info['key'])
             self.assertEqual(info['idx'], 0)
@@ -181,10 +187,15 @@ class MyLineBotTestCase(unittest.TestCase):
         sleep(TEST_INTERVAL*2+2)
 
         watch_drinkings()
-        msg = parse_reply(test_id, u'帰宅した', memcache.get(test_id))
+        (stat, info) = get_status(test_id, is_peek=True)
+        msg = handle_reply(test_id, u'帰宅した', info)
         self.assertTrue(msg.startswith(u'お疲れさまでした'), msg)
 
         drinking = Drinking.get_key(test_id).get()
+        self.assertEqual(drinking.finished_date.year, now_utc.year)
+        self.assertEqual(drinking.finished_date.month, now_utc.month)
+        self.assertEqual(drinking.finished_date.day, now_utc.day)
+        self.assertEqual(drinking.finished_date.hour, now_utc.hour)
         for j, watch in enumerate(drinking.watches):
             self.assertEqual(watch.is_replied, True if j == 0 else False)
             self.assertEqual(watch.sent_count, 1 if j == 0 else 0)
@@ -209,15 +220,34 @@ class MyLineBotTestCase(unittest.TestCase):
 
         check_result()
         (status, info) = get_status(test_id)
-        self.assertEqual(status, STAT_WAIT_RESULT)
+        self.assertEqual(status, User.STAT_WAIT_RESULT)
 
         result = u'二日酔い'
-        msg = parse_result(test_id, result, info)
+        msg = handle_result(test_id, result, info)
 
         drinking = Drinking.get_key(test_id).get()
         self.assertEqual(drinking.result, result, drinking.result)
         self.assertTrue(msg.find(u'次回も大人飲み') >= 0, msg)
 
 
+    def testCancel(self):
+        test_id = 'test'
+        now = datetime.now()+timedelta(minutes=5)
+        handle_message(test_id, u'%02d%02dから呑む' % (now.hour, now.minute))
+        msg = handle_message(test_id, u'やめ')
+        if msg is None:
+            msg = u''
+        self.assertEqual(msg, u'予約された飲みをキャンセルしました', msg)
+
+
+    def testFinish(self):
+        test_id = 'test'
+        now = datetime.now()+timedelta(minutes=5)
+        handle_message(test_id, u'%02d%02dから呑む' % (now.hour, now.minute))
+        msg = handle_message(test_id, u'帰宅した')
+        if msg is None:
+            msg = u''
+        self.assertTrue(msg.startswith(u'お疲れさま')>=0, msg)
+        
 if __name__ == '__main__':
     unittest.main()
