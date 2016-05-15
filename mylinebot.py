@@ -271,6 +271,7 @@ def handle_message(mid, msg):
         return u'飲みは1つしか予約できません。予約した飲みをキャンセルするには「やめ」とメッセージしてください。'
 
     # 3rd, determine date and time
+    now = datetime.now(tz=tz_utc).replace(second=0, microsecond=0, tzinfo=None)
     s_date = datetime.now(tz=tz_jst).replace(second=0, microsecond=0)
     for id, elm in elms.items():
         if depends_drink(id, elms, drink_id):
@@ -324,7 +325,7 @@ def handle_message(mid, msg):
     s_date_str = u'%d月%d日%d時%d分' % (s_date.month, s_date.day, s_date.hour, s_date.minute)
 
     # check if s_date is valid
-    if utc_s_date < datetime.now(tz=tz_utc).replace(tzinfo=None):
+    if utc_s_date < now:
         # past date !!
         return s_date_str + u'は過去です。'
 
@@ -342,7 +343,7 @@ def handle_message(mid, msg):
                         watches=watches)
     drinking.put()
 
-    return s_date_str + u'から飲むのですね！\n約%d分毎に%d回メッセージを送信しますので、何を何杯飲んだかなど、状況を返信してくださいね。' % (WATCH_INTERVAL, WATCH_COUNTS)
+    return s_date_str + u'から飲むのですね！\n約%d分毎に%d回メッセージを送信しますので、何を何杯飲んだかなど、状況を返信してくださいね。帰宅したら帰宅とメッセージしてください。' % (WATCH_INTERVAL, WATCH_COUNTS)
 
 def handle_result(mid, text, info):
     drinking = Drinking.get_key(info['key']).get()

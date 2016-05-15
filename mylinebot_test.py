@@ -77,6 +77,13 @@ class MyLineBotTestCase(unittest.TestCase):
                     (dt.month, dt.day, dt.hour if dt.hour >=12 else dt.hour+12, dt.minute)
             self.assertTrue(msg.startswith(c_msg), msg + '\n' + c_msg)
             cancel_drinking('test')
+
+    def testNow(self):
+        test_id = 'test'
+        dt = datetime.now()
+        c_msg = u'%d月%d日%d時' % (dt.month, dt.day, dt.hour)
+        msg = handle_message(test_id, u'今から飲む')
+        self.assertTrue(msg.startswith(c_msg), msg)
                 
 
     def testPastDrinking(self):
