@@ -135,7 +135,7 @@ class MyLineBotTestCase(unittest.TestCase):
                 self.assertEqual(watch.sent_count, 1 if j <= i else 0)
 
         drinking = Drinking.get_key(test_id).get()
-        self.assertTrue(drinking.is_done)
+        self.assertFalse(drinking.is_done)
 
 
     def testWatchDelayed(self):
@@ -248,6 +248,18 @@ class MyLineBotTestCase(unittest.TestCase):
         if msg is None:
             msg = u''
         self.assertTrue(msg.startswith(u'お疲れさま')>=0, msg)
+
+    def testMultiFinish(self):
+        test_id = 'test'
+        now = datetime.now()+timedelta(minutes=5)
+        handle_message(test_id, u'%02d%02dから呑む' % (now.hour, now.minute))
+        msg = handle_message(test_id, u'帰宅した')
+        if msg is None:
+            msg = u''
+        self.assertTrue(msg.startswith(u'お疲れさま')>=0, msg)
+        msg = handle_message(test_id, u'帰宅した')
+        self.assertTrue(msg.startswith(u'すでに帰宅')>=0, msg)
+        
         
 if __name__ == '__main__':
     unittest.main()

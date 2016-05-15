@@ -25,7 +25,7 @@ from tzimpl import JST, UTC
 from db import User, Watch, Drinking
 import os
 
-WATCH_COUNTS = 3
+WATCH_COUNTS = 5
 WATCH_INTERVAL = 60
 WATCH_TIMEOUT = 20
 WATCH_REPLY_TIMEOUT = 60 # 60 min
@@ -136,7 +136,7 @@ def finish_the_drinkig(drinking):
 def finish_drinking(mid):
     query = Drinking.query(Drinking.mid == mid, Drinking.is_done == False)
     drinkings = query.fetch(1)
-    if drinkings == None:
+    if len(drinkings) == 0:
         return u'すでに帰宅されているようです'
 
     # finish the drinking
@@ -355,12 +355,12 @@ def handle_result(mid, text, info):
 
 def handle_reply(mid, text, watch_info):
     drinking = Drinking.get_key(watch_info['key']).get()
+    (elms, drink_id, cancel_id, finished_id) = parse_message(text)
     if drinking:
         drinking.watches[watch_info['idx']].reply = text
         drinking.watches[watch_info['idx']].is_replied = True
-        if watch_info['idx'] == WATCH_COUNTS-1 or \
-           (text.find(u'帰宅') >= 0 or text.find(u'終') >= 0):
-            # it is last watch
+        if finished_id >= 0:
+            # it is finished
             msg = finish_the_drinkig(drinking)
         else:
             msg = u'引き続き大人飲みでいきましょう！'
