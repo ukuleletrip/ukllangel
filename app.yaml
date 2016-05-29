@@ -17,6 +17,9 @@ handlers:
   static_files: help/index.html
   upload: help/index.html
 
+- url: /img
+  static_dir: img
+
 - url: /css
   static_dir: css
 
