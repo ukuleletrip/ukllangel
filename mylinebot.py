@@ -24,22 +24,51 @@ from datetime import datetime, timedelta
 from tzimpl import JST, UTC
 from db import User, Watch, Drinking
 import os
+import uuid
+import jinja2
+
+JINJA_ENVIRONMENT = jinja2.Environment(
+    loader=jinja2.FileSystemLoader(os.path.dirname(__file__)),
+    extensions=['jinja2.ext.autoescape'],
+    autoescape=True)
 
 WATCH_COUNTS = 5
 WATCH_INTERVAL = 60
 WATCH_TIMEOUT = 20
 WATCH_REPLY_TIMEOUT = 60 # 60 min
 RESULT_TIMEOUT = 12*60   # 12 hour
+HISTORY_DURATION = 30
+MAX_HISTORY = 20
 
 tz_jst = JST()
 tz_utc = UTC()
 
-usage = u'大人飲みのお手伝いをします！使い方は https://ukllangel.appspot.com/help を参照してください。'
+service_url = 'https://ukllangel.appspot.com'
+
+usage = u'大人飲みのお手伝いをします！使い方は %s/help を参照してください。' % (service_url)
 welcome = usage
+
+def utc_now():
+    return datetime.now(tz=tz_utc).replace(tzinfo=None)
+
+def generate_random_url(mid):
+    for i in range(5):
+        history_url = uuid.uuid4().hex
+        query = User.query(User.history_url == history_url)
+        users = query.fetch()
+        if len(users) > 0:
+            # duplicated url...
+            continue
+        break
+    else:
+        # I believe it will not happen
+        return None
+    
+    return history_url
 
 def watch_drinkings():
     watches_to_send = {}
-    now = datetime.now(tz=tz_utc).replace(tzinfo=None)
+    now = utc_now()
     query = Drinking.query(Drinking.is_done == False,
                            Drinking.watches.date <= now, Drinking.watches.is_replied == False)
     drinkings_to_watch = query.fetch()
@@ -57,8 +86,7 @@ def watch_drinkings():
 
 def check_result():
     req_to_send = {}
-    yesterday = (datetime.now(tz=tz_utc)+timedelta(days=-1)) \
-                .replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+    yesterday = (utc_now()+timedelta(days=-1)).replace(hour=0, minute=0, second=0, microsecond=0)
     query = Drinking.query(Drinking.start_date >= yesterday,
                            Drinking.start_date < yesterday+timedelta(days=1),
                            Drinking.result == None)
@@ -95,8 +123,7 @@ def send_request_message(reqs):
 
         user.status = User.STAT_WAIT_RESULT
         user.status_info = value
-        user.status_expire = (datetime.now(tz=tz_utc)+timedelta(seconds=RESULT_TIMEOUT*60)) \
-                              .replace(tzinfo=None)
+        user.status_expire = utc_now()+timedelta(seconds=RESULT_TIMEOUT*60)
         user.put()
         
     send_message(reqs.keys(), u'昨日はお疲れさまでした。今日の様子はいかがですか？返信してくださいね！')
@@ -111,8 +138,7 @@ def send_watch_message(watches):
 
         user.status = User.STAT_WAIT_REPLY
         user.status_info = value
-        user.status_expire = (datetime.now(tz=tz_utc)+timedelta(seconds=WATCH_REPLY_TIMEOUT*60)) \
-                              .replace(tzinfo=None)
+        user.status_expire = utc_now()+timedelta(seconds=WATCH_REPLY_TIMEOUT*60)
         user.put()
         
     send_message(watches.keys(), u'楽しんでいますか？どのくらい飲みましたか？返信してくださいね！')
@@ -129,7 +155,7 @@ def cancel_drinking(mid):
 
 def finish_the_drinkig(drinking):
     drinking.is_done = True
-    drinking.finished_date = datetime.now(tz=tz_utc).replace(tzinfo=None)
+    drinking.finished_date = utc_now()
     drinking.put()
     return u'お疲れさまでした！'
 
@@ -142,8 +168,59 @@ def finish_drinking(mid):
     # finish the drinking
     return finish_the_drinkig(drinkings[0])
 
+def get_drinking_history(mid):
+    dt = utc_now().replace(hour=0, minute=0, second=0, microsecond=0)
+    query = Drinking.query(Drinking.mid==mid, Drinking.start_date<dt).order(-Drinking.start_date)
+    return query.fetch(MAX_HISTORY)
+
+def get_drinking_history_content(history_url):
+    query = User.query(User.history_url==history_url)
+    users = query.fetch(1)
+    if len(users) == 0:
+        return None
+
+    drinkings = get_drinking_history(users[0].key.id())
+    t_drinkings = []
+    for drinking in drinkings:
+        t_drinking = {}
+        t_drinking['started'] = drinking.start_date. \
+                                replace(tzinfo=tz_utc).astimezone(tz_jst).strftime('%Y-%m-%d %H:%M')
+        t_drinking['finished'] = drinking.finished_date. \
+                                 replace(tzinfo=tz_utc).astimezone(tz_jst).strftime('%H:%M') \
+                                 if drinking.finished_date else u''
+        t_drinking['result'] = drinking.result if drinking.result else u''
+        t_drinking['watches'] = []
+        for watch in drinking.watches:
+            if watch.sent_count > 0:
+                t_watch = {}
+                t_watch['date'] = watch.date. \
+                                  replace(tzinfo=tz_utc).astimezone(tz_jst).strftime('%H:%M')
+                t_watch['sent_count'] = watch.sent_count
+                t_watch['reply'] = watch.reply if watch.reply else u'返信なし'
+                t_drinking['watches'].append(t_watch)
+        t_drinkings.append(t_drinking)
+
+    template_values = {
+        'drinkings': t_drinkings,
+    }
+    template = JINJA_ENVIRONMENT.get_template('templates/index.html')
+    return template.render(template_values)
+
+def history_drinking(mid):
+    history_url = generate_random_url(mid)
+    user = User.get_key(mid).get()
+    if history_url is None or user is None:
+        return u'まだ飲みの登録がないか、参照が行えません'
+
+    user.history_url = history_url
+    user.history_expire = utc_now()+timedelta(minutes=5)
+    user.put()
+
+    url = service_url + '/history/' + history_url
+    return u'過去の飲みは %s を参照ください。このURLは%d分間有効です。' % (url, HISTORY_DURATION)
+
 def get_status(mid, is_peek=False):
-    now = datetime.now(tz=tz_utc).replace(tzinfo=None)
+    now = utc_now()
     user = User.get_key(mid).get()
     if user is None or user.status == User.STAT_NONE:
         return (User.STAT_NONE, None)
@@ -229,11 +306,12 @@ def parse_message(msg):
     drink_id = -1
     cancel_id = -1
     finished_id = -1
+    history_id = -1
     # I'm not sure that I have to use Yahoo API...
     # I just wanted to use that !!!
     for id, elm in elms.items():
         for morphem in elm['morphemlist']:
-            if morphem['pos'] == u'動詞' or morphem['pos'] == u'名詞':
+            if morphem['pos'] == u'動詞' or morphem['pos'] == u'名詞' or morphem['pos'] == u'副詞':
                 mo = re.search(u'(飲|呑|の)(み|む)', morphem['surface'])
                 if mo:
                     drink_id = id
@@ -245,14 +323,27 @@ def parse_message(msg):
                       morphem['surface'].find(u'帰') >= 0):
                     finished_id = id
                     break
+                elif (morphem['surface'].find(u'過去') >= 0 or
+                      morphem['surface'].find(u'前') >= 0):
+                    history_id = id
+                    # do not break with history morphem
+                else:
+                    mo = re.search(u'(今|これ)まで', morphem['surface'])
+                    if mo:
+                        history_id = id
+                        # do not break with history morphem
         else:
             continue
         break
 
-    return (elms, drink_id, cancel_id, finished_id)
+    return (elms, drink_id, cancel_id, finished_id, history_id)
 
 def handle_message(mid, msg):
-    (elms, drink_id, cancel_id, finished_id) = parse_message(msg)
+    (elms, drink_id, cancel_id, finished_id, history_id) = parse_message(msg)
+
+    if history_id >= 0 and drink_id >= 0 and depends_drink(history_id, elms, drink_id):
+        # this is request for drinking history
+        return history_drinking(mid)
 
     if finished_id >= 0:
         # this is finish message
@@ -271,7 +362,7 @@ def handle_message(mid, msg):
         return u'飲みは1つしか予約できません。予約した飲みをキャンセルするには「やめ」とメッセージしてください。'
 
     # 3rd, determine date and time
-    now = datetime.now(tz=tz_utc).replace(second=0, microsecond=0, tzinfo=None)
+    now = utc_now().replace(second=0, microsecond=0)
     s_date = datetime.now(tz=tz_jst).replace(second=0, microsecond=0)
     for id, elm in elms.items():
         if depends_drink(id, elms, drink_id):
@@ -285,7 +376,8 @@ def handle_message(mid, msg):
                 '(\d\d)\D(\d\d)\D',
                 '(\d\d)(\d\d)',
                 '(\d+)\D(\d+)',
-                u'(\d+)時'
+                u'(\d+)時',
+                u'(\d+)じ'
             ]     
             for pattern in time_patterns:
                 mo = re.search(pattern, start_info)
@@ -295,13 +387,16 @@ def handle_message(mid, msg):
                     if hour < 12 and \
                        (start_info.find('PM') >= 0 or
                         start_info.find('pm') >= 0 or
-                        start_info.find(u'午後') >= 0):
+                        start_info.find(u'午後') >= 0 or
+                        start_info.find(u'ごご') >= 0):
                         hour += 12
                     s_date = s_date.replace(hour=hour, minute=minute)
                     break
 
             # find date
-            if start_info.find(u'明日') >= 0:
+            if start_info.find(u'明日') >= 0 or \
+               start_info.find(u'あした') >= 0 or \
+               start_info.find(u'あす') >= 0:
                 s_date = s_date + timedelta(days=1)
             elif start_info.find(u'明後日') >= 0 or \
                  start_info.find(u'あさって') >= 0:
@@ -356,7 +451,7 @@ def handle_result(mid, text, info):
 
 def handle_reply(mid, text, watch_info):
     drinking = Drinking.get_key(watch_info['key']).get()
-    (elms, drink_id, cancel_id, finished_id) = parse_message(text)
+    (elms, drink_id, cancel_id, finished_id, history_id) = parse_message(text)
     if drinking:
         drinking.watches[watch_info['idx']].reply = text
         drinking.watches[watch_info['idx']].is_replied = True

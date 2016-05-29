@@ -17,7 +17,7 @@ from appkeys import APP_KEYS
 from datetime import datetime, timedelta
 import hmac, hashlib, base64
 
-from mylinebot import receive_message, receive_operation, watch_drinkings, check_result
+from mylinebot import receive_message, receive_operation, watch_drinkings, check_result, get_drinking_history_content
 
 usage = u'「xx時xx分から飲む」などとメッセージするとその時間の1、2、3時間後に飲み過ぎていないか確認するメッセージを送信します。\n途中で止めたい時、無事帰宅した時は「帰宅」や「やめ」とメッセージしてください。'
 welcome = u'ようこそ！大人飲みのためのLINE Botサービスです！\n?をメッセージすると使い方を返信します。'
@@ -54,4 +54,12 @@ class ReqResultHandler(webapp2.RequestHandler):
     def get(self):
         check_result()
 
+
+class HistoryHandler(webapp2.RequestHandler):
+    def get(self):
+        elms = self.request.path.split('/')
+        content = get_drinking_history_content(elms[-1])
+        if content is None:
+            self.abort(404)
+        self.response.write(content)
 

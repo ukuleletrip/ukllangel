@@ -17,9 +17,20 @@ handlers:
   static_files: help/index.html
   upload: help/index.html
 
+- url: /css
+  static_dir: css
+
+- url: /fonts
+  static_dir: fonts
+
+- url: /js
+  static_dir: js
+
 - url: .*
   script: main.app
 
 libraries:
 - name: webapp2
-  version: "2.5.2"
+  version: latest
+- name: jinja2
+  version: latest

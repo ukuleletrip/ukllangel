@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+{% autoescape true %}
+<html lang="ja">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+        <title>飲み履歴</title>
+        <meta name="viewport" content="width=device-width,initial-scale=1.0,minimum-scale=1.0,maximum-scale=1.0,user-scalable=no">
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+        <link rel="shortcut icon" href="favicon.ico" >
+        <link rel="apple-touch-icon" href="apple-touch-icon.png" /> 
+		<link href="/css/bootstrap.min.css" rel="stylesheet">
+		<link href="/css/theme.bootstrap.css" rel="stylesheet">
+        <script language="javascript" type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/1.11.0/jquery.min.js"></script>
+		<script src="/js/bootstrap.min.js"></script>
+		<script type="text/javascript" src="/js/jquery.tablesorter.js"></script>
+		<!-- tablesorter widgets (optional) -->
+		<!-- <script type="text/javascript" src="/js/jquery.tablesorter.widgets.js"></script> -->
+        <!-- <script type="text/javascript" src="/js/jquery.activity-indicator-1.0.0.min.js"></script> -->
+        <!-- <script type="text/javascript" src="/js/jsrender.min.js"></script> -->
+        <script type="text/javascript">
+		  $(function() {
+			  $('.tablesorter-childRow td').hide();
+
+			  $("#mtable").tablesorter({ sortList : [[3,1]],
+										 theme : "bootstrap",
+										 //cssDesc: "glyphicon glyphicon-chevron-down",
+										 //cssAsc: "glyphicon glyphicon-chevron-up",
+									   });
+			  $('.tablesorter').delegate('.toggle', 'click' ,function(){
+				  // use "nextUntil" to toggle multiple child rows
+				  // toggle table cells instead of the row
+				  $(this).closest('tr').nextUntil('tr:not(.tablesorter-childRow)').find('td').toggle();
+				  var childSpan = $(this).find('span');
+				  if (childSpan.hasClass("glyphicon-minus-sign")) {
+					  childSpan.attr("class", "glyphicon glyphicon-plus-sign");
+				  } else {
+					  childSpan.attr("class", "glyphicon glyphicon-minus-sign");
+				  }
+				  return false;
+			  });
+		  });
+        </script>
+        <style>
+			.drinking-ext {
+				background:#ccc;
+			}
+        </style>
+    </head>
+    <body>
+	  <div class="panel panel-default">
+		<!-- Table -->
+		<!-- <div class="table-responsive"> -->
+		<table class="table table-hover tablesorter" id="mtable">
+		  <thead>
+			<th>開始</th>
+			<th>帰宅</th>
+			<th>次の日</th>
+			<th></th>
+		  </thead>
+		  <tbody id="mlist">
+			{% for drinking in drinkings %}
+			<tr><td>{{drinking.started}}</td>
+			  <td>{{drinking.finished}}</td>
+			  <td>{{drinking.result}}</td>
+			  <td><a href="#" class="toggle"><span class="glyphicon glyphicon-plus-sign"></span></a></td></tr>
+			<tr class="tablesorter-childRow drinking-ext">
+			  <td colspan="4" style="display: none;">
+				<table class="table">
+				  <theader><th>チェック</th><th>回数</th><th>返信</th></theader>
+				  <tbody>
+					{% for watch in drinking.watches %}
+					<tr>
+					  <td>{{watch.date}}</td>
+					  <td>{{watch.sent_count}}</td>
+					  <td>{{watch.reply}}</td>
+					</tr>
+					{% endfor %}
+				  </tbody>
+				</table>
+			  </td>
+			</tr>
+			{% endfor %}
+		  </tbody>
+		</table>
+		<!-- </div> -->
+	  </div>
+    </body>
+</html>
+{% endautoescape %}

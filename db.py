@@ -11,6 +11,8 @@ class User(ndb.Model):
     status = ndb.IntegerProperty(required=True, default=STAT_NONE)
     status_info = ndb.JsonProperty()
     status_expire = ndb.DateTimeProperty()
+    history_url = ndb.StringProperty()
+    history_expire = ndb.DateTimeProperty()
     
     @staticmethod
     def get_key(mid):

@@ -1,9 +1,15 @@
 #! /usr/bin/env python
 # -*- coding:utf-8 -*-
+#
+# usage: python -m unittest mylinebot_test.MyLineBotTestCase.testParseDate
+#        ./mylinebot_test.py
+#
 
 import sys, os
+sys.path.insert(0, 'libs')
 sys.path.insert(1, '/usr/local/google_appengine')
 sys.path.insert(1, '/usr/local/google_appengine/lib/yaml/lib')
+from bs4 import BeautifulSoup
 
 import unittest
 from google.appengine.ext import ndb
@@ -59,6 +65,9 @@ class MyLineBotTestCase(unittest.TestCase):
         test_patterns.append({ 'date'  : now2,
                                'msg'   : u'%d時から飲む' % (now2.hour),
                                'msgpm' : u'pm%d時から飲む' % (now2.hour%12)})
+        test_patterns.append({ 'date'  : now2,
+                               'msg'   : u'%dじから飲む' % (now2.hour),
+                               'msgpm' : u'ごご%dじから飲む' % (now2.hour%12)})
 
         for test in test_patterns:
             dt = test['date']
@@ -77,6 +86,7 @@ class MyLineBotTestCase(unittest.TestCase):
                     (dt.month, dt.day, dt.hour if dt.hour >=12 else dt.hour+12, dt.minute)
             self.assertTrue(msg.startswith(c_msg), msg + '\n' + c_msg)
             cancel_drinking('test')
+
 
     def testNow(self):
         test_id = 'test'
@@ -105,7 +115,7 @@ class MyLineBotTestCase(unittest.TestCase):
         TEST_INTERVAL = 10
         test_id = 'test'
         watches = []
-        now_utc = (datetime.now(tz=tz_utc)+timedelta(seconds=TEST_INTERVAL)).replace(tzinfo=None)
+        now_utc = utc_now()+timedelta(seconds=TEST_INTERVAL)
         for i in range(WATCH_COUNTS):
             watches.append(Watch(date=now_utc+timedelta(seconds=TEST_INTERVAL*(i+1))))
 
@@ -149,7 +159,7 @@ class MyLineBotTestCase(unittest.TestCase):
         TEST_INTERVAL = 5
         test_id = 'test'
         watches = []
-        now_utc = (datetime.now(tz=tz_utc)+timedelta(seconds=TEST_INTERVAL)).replace(tzinfo=None)
+        now_utc = utc_now()+timedelta(seconds=TEST_INTERVAL)
         for i in range(WATCH_COUNTS):
             watches.append(Watch(date=now_utc+timedelta(seconds=TEST_INTERVAL*(i+1))))
 
@@ -181,7 +191,7 @@ class MyLineBotTestCase(unittest.TestCase):
         TEST_INTERVAL = 5
         test_id = 'test'
         watches = []
-        now_utc = (datetime.now(tz=tz_utc)+timedelta(seconds=TEST_INTERVAL)).replace(tzinfo=None)
+        now_utc = utc_now()+timedelta(seconds=TEST_INTERVAL)
         for i in range(WATCH_COUNTS):
             watches.append(Watch(date=now_utc+timedelta(seconds=TEST_INTERVAL*(i+1))))
 
@@ -212,7 +222,7 @@ class MyLineBotTestCase(unittest.TestCase):
     def testResult(self):
         test_id = 'test'
         watches = []
-        now_utc = (datetime.now(tz=tz_utc)+timedelta(days=-1)).replace(tzinfo=None)
+        now_utc = utc_now()+timedelta(days=-1)
         for i in range(WATCH_COUNTS):
             watches.append(Watch(date=now_utc+timedelta(seconds=WATCH_INTERVAL*(i+1)),
                                  sent_count=1,
@@ -254,7 +264,7 @@ class MyLineBotTestCase(unittest.TestCase):
         msg = handle_message(test_id, u'帰宅した')
         if msg is None:
             msg = u''
-        self.assertTrue(msg.startswith(u'お疲れさま')>=0, msg)
+        self.assertTrue(msg.startswith(u'お疲れさま'), msg)
 
     def testMultiFinish(self):
         test_id = 'test'
@@ -263,10 +273,56 @@ class MyLineBotTestCase(unittest.TestCase):
         msg = handle_message(test_id, u'帰宅した')
         if msg is None:
             msg = u''
-        self.assertTrue(msg.startswith(u'お疲れさま')>=0, msg)
+        self.assertTrue(msg.startswith(u'お疲れさま'), msg)
         msg = handle_message(test_id, u'帰宅した')
-        self.assertTrue(msg.startswith(u'すでに帰宅')>=0, msg)
-        
+        self.assertTrue(msg.startswith(u'すでに帰宅'), msg)
+
+    def testHistory(self):
+        test_id = 'test'
+        test_msgs = [ u'過去の飲みは？',
+                      u'これまでの呑みを',
+                      u'今までの呑みは？',
+                      u'前の呑み'
+        ]
+        for test_msg in test_msgs:
+            msg = handle_message(test_id, test_msg)
+            self.assertTrue(msg.startswith(u'まだ飲みの'), msg)
+
+        user = User(id=test_id)
+        user.put()
+        for test_msg in test_msgs:
+            msg = handle_message(test_id, test_msg)
+            self.assertTrue(msg.startswith(u'過去の飲みは'), msg)
+
+        user = User.get_key(test_id).get()
+        self.assertTrue(user.history_url != None and len(user.history_url) > 0)
+        self.assertTrue(user.history_expire < utc_now()+timedelta(minutes=HISTORY_DURATION))
+
+        sdt = utc_now()+timedelta(days=-2)
+        check_sdt = []
+        for i in range(MAX_HISTORY+1):
+            watches = []
+            for j in range(WATCH_COUNTS):
+                watches.append(Watch(date=sdt+timedelta(minutes=WATCH_INTERVAL*(i+1))))
+
+            key = test_id + sdt.strftime('%Y%m%d%H%M')
+            drinking = Drinking(id=key,
+                                mid=test_id,
+                                start_date=sdt,
+                                watches=watches)
+            drinking.put()
+            check_sdt.append(sdt.replace(tzinfo=tz_utc).astimezone(tz_jst).strftime('%Y-%m-%d %H:%M'))
+            sdt = sdt+timedelta(days=-1)
+
+            
+        self.assertEqual(get_drinking_history_content(user.history_url[:-1]), None)
+                         
+        soup = BeautifulSoup(get_drinking_history_content(user.history_url), 'html.parser')
+        trs = soup.body.div.table.tbody.findAll('tr')
+        self.assertEqual(len(trs), MAX_HISTORY*2)
+        for i in range(MAX_HISTORY):
+            self.assertEqual(trs[i*2].td.text, check_sdt[i])
+
         
 if __name__ == '__main__':
     unittest.main()
