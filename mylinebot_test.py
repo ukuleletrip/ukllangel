@@ -311,7 +311,7 @@ class MyLineBotTestCase(unittest.TestCase):
                                 start_date=sdt,
                                 watches=watches)
             drinking.put()
-            check_sdt.append(sdt.replace(tzinfo=tz_utc).astimezone(tz_jst).strftime('%Y-%m-%d %H:%M'))
+            check_sdt.append(format_jdate(sdt.replace(tzinfo=tz_utc).astimezone(tz_jst)))
             sdt = sdt+timedelta(days=-1)
 
             

@@ -51,6 +51,11 @@ welcome = usage
 def utc_now():
     return datetime.now(tz=tz_utc).replace(tzinfo=None)
 
+def format_jdate(dt):
+    weekday = (u'月',u'火',u'水',u'木',u'金',u'土',u'日')
+    return "%d/%d/%d(%s) %02d:%02d" % (dt.year, dt.month, dt.day, weekday[dt.weekday()],
+                                       dt.hour, dt.minute)
+
 def generate_random_url(mid):
     for i in range(5):
         history_url = uuid.uuid4().hex
@@ -183,8 +188,8 @@ def get_drinking_history_content(history_url):
     t_drinkings = []
     for drinking in drinkings:
         t_drinking = {}
-        t_drinking['started'] = drinking.start_date. \
-                                replace(tzinfo=tz_utc).astimezone(tz_jst).strftime('%Y-%m-%d %H:%M')
+        t_drinking['started'] = format_jdate(drinking.start_date.
+                                             replace(tzinfo=tz_utc).astimezone(tz_jst))
         t_drinking['finished'] = drinking.finished_date. \
                                  replace(tzinfo=tz_utc).astimezone(tz_jst).strftime('%H:%M') \
                                  if drinking.finished_date else u''
