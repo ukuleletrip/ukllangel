@@ -378,11 +378,10 @@ def handle_message(mid, msg):
 
             # find time
             time_patterns = [
-                '(\d\d)\D(\d\d)\D',
+                u'(\d\d)[時じ:：](\d\d)\D',
                 '(\d\d)(\d\d)',
-                '(\d+)\D(\d+)',
-                u'(\d+)時',
-                u'(\d+)じ'
+                u'(\d+)[時じ:：](\d+)',
+                u'(\d+)[時じ]'
             ]     
             for pattern in time_patterns:
                 mo = re.search(pattern, start_info)
