@@ -247,13 +247,15 @@ def get_status(mid, is_peek=False):
 def receive_message(content):
     (status, info) = get_status(content['from'])
     logging.debug('status: %d' % (status))
+
+    in_msg = content['text']
     if status == User.STAT_WAIT_REPLY:
         # we think it is reply...
-        msg = handle_reply(content['from'], content['text'], info)
+        msg = handle_reply(content['from'], in_msg, info)
     elif status == User.STAT_WAIT_RESULT:
-        msg = handle_result(content['from'], content['text'], info)
+        msg = handle_result(content['from'], in_msg, info)
     else:
-        msg = handle_message(content['from'], content['text'])
+        msg = handle_message(content['from'], in_msg)
         if msg is None:
             msg = usage
 
@@ -294,6 +296,8 @@ def call_yahoo_jparser(msg):
 
 
 def parse_message(msg):
+    if type(msg) == unicode:
+        msg = unicodedata.normalize('NFKC', msg)
     soup = call_yahoo_jparser(msg)
 
     # 1st, create parsed dict with key=id
@@ -374,7 +378,6 @@ def handle_message(mid, msg):
             start_info = ''
             for morphem in elm['morphemlist']:
                 start_info += morphem['surface']
-            start_info = unicodedata.normalize('NFKC', start_info)
 
             # find time
             time_patterns = [

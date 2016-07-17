@@ -64,6 +64,9 @@ class MyLineBotTestCase(unittest.TestCase):
         test_patterns.append({ 'date'  : now,
                                'msg'   : u'%d月%d日%02d:%02dから飲み' % (now.month, now.day, now.hour, now.minute),
                                'msgpm' : u'%d月%d日%02d:%02dPMから呑み' % (now.month, now.day, now.hour%12, now.minute)})
+        test_patterns.append({ 'date'  : now,
+                               'msg'   : u'%d月%d日%02d：%02dから飲み' % (now.month, now.day, now.hour, now.minute),
+                               'msgpm' : u'%d月%d日%02d：%02dPMから呑み' % (now.month, now.day, now.hour%12, now.minute)})
         now2 = (now+timedelta(hours=1)).replace(minute=0)
         test_patterns.append({ 'date'  : now2,
                                'msg'   : u'%d時から飲む' % (now2.hour),
