@@ -26,6 +26,7 @@ from db import User, Watch, Drinking
 import os
 import uuid
 import jinja2
+from linebotapi import LineBotAPI, WebhookRequest
 
 JINJA_ENVIRONMENT = jinja2.Environment(
     loader=jinja2.FileSystemLoader(os.path.dirname(__file__)),
@@ -224,7 +225,8 @@ def history_drinking(mid):
     url = service_url + '/history/' + history_url
     return u'過去の飲みは %s を参照ください。このURLは%d分間有効です。' % (url, HISTORY_DURATION)
 
-def get_status(mid, is_peek=False):
+def get_status(user_id, is_peek=False):
+    mid = user_id
     now = utc_now()
     user = User.get_key(mid).get()
     if user is None or user.status == User.STAT_NONE:
@@ -244,32 +246,29 @@ def get_status(mid, is_peek=False):
 
         return (status, info)
 
-def receive_message(content):
-    (status, info) = get_status(content['from'])
+def receive_message(recv_req):
+    user_id = recv_req.get_user_id()
+    reply_token = recv_req.get_reply_token()
+    (status, info) = get_status(user_id)
     logging.debug('status: %d' % (status))
 
-    in_msg = content['text']
+    in_msg = recv_req.get_message()
     if status == User.STAT_WAIT_REPLY:
         # we think it is reply...
-        msg = handle_reply(content['from'], in_msg, info)
+        msg = handle_reply(in_msg, info)
     elif status == User.STAT_WAIT_RESULT:
-        msg = handle_result(content['from'], in_msg, info)
+        msg = handle_result(in_msg, info)
     else:
-        msg = handle_message(content['from'], in_msg)
+        msg = handle_message(user_id, in_msg)
         if msg is None:
             msg = usage
 
     if msg:
-        send_message([content['from']], msg)
+        reply_message(reply_token, msg)
 
-def receive_operation(content):
-    opType = int(content['opType'])
-    if opType == 4:
-        # add as friend
-        send_message([content['params'][0]], welcome)
-    elif opType == 8:
-        # block account
-        pass
+def receive_follow(recv_req):
+    # add as friend
+    reply_message(recv_req.get_reply_token(), welcome)
 
 def depends_drink(id, elms, nomi_id):
     elm = elms[id]
@@ -347,7 +346,8 @@ def parse_message(msg):
 
     return (elms, drink_id, cancel_id, finished_id, history_id)
 
-def handle_message(mid, msg):
+def handle_message(user_id, msg):
+    mid = user_id
     (elms, drink_id, cancel_id, finished_id, history_id) = parse_message(msg)
 
     if history_id >= 0 and drink_id >= 0 and depends_drink(history_id, elms, drink_id):
@@ -447,7 +447,7 @@ def handle_message(mid, msg):
 
     return s_date_str + u'から飲むのですね！\n約%d分毎に%d回メッセージを送信しますので、何を何杯飲んだかなど、状況を返信してくださいね。帰宅したら帰宅とメッセージしてください。' % (WATCH_INTERVAL, WATCH_COUNTS)
 
-def handle_result(mid, text, info):
+def handle_result(text, info):
     drinking = Drinking.get_key(info['key']).get()
     if drinking:
         drinking.result = text
@@ -456,7 +456,7 @@ def handle_result(mid, text, info):
     else:
         return None
 
-def handle_reply(mid, text, watch_info):
+def handle_reply(text, watch_info):
     drinking = Drinking.get_key(watch_info['key']).get()
     (elms, drink_id, cancel_id, finished_id, history_id) = parse_message(text)
     if drinking:
@@ -472,6 +472,16 @@ def handle_reply(mid, text, watch_info):
     else:
         return None
 
+def reply_message(reply_token, text):
+    if 'SERVER_SOFTWARE' not in os.environ or \
+       os.environ['SERVER_SOFTWARE'].find('testbed') >= 0:
+        # I'm not running on server
+        return
+
+    line_bot_api = LineBotAPI(APP_KEYS['line']['token'])
+    line_bot_api.reply_message(text, reply_token)
+
+
 def send_message(mids, text):
     if 'SERVER_SOFTWARE' not in os.environ or \
        os.environ['SERVER_SOFTWARE'].find('testbed') >= 0:
@@ -480,33 +490,9 @@ def send_message(mids, text):
 
     if len(mids) == 0:
         return
-        
-    url = 'https://trialbot-api.line.me/v1/events'
-    params = {
-        'to': mids,
-        'toChannel': 1383378250,
-        'eventType': '138311608800106203',
-        'content' : {
-            'contentType' : 1,
-            'toType'      : 1,
-            'text'        : text
-        }
-    }
-    data = json.dumps(params, ensure_ascii=False)
-    logging.debug(data)
-    result = urlfetch.fetch(
-        url=url,
-        payload=data,
-        method=urlfetch.POST,
-        headers={
-            'Content-type':'application/json; charset=UTF-8',
-            'X-Line-ChannelID': APP_KEYS['line']['id'],
-            'X-Line-ChannelSecret': APP_KEYS['line']['secret'],
-            'X-Line-Trusted-User-With-ACL': APP_KEYS['line']['mid']
-        }
-    )
-    if result.status_code == 200:
-        logging.debug(result.content)
-    else:
-        logging.error(result.content)
+
+    line_bot_api = LineBotAPI(APP_KEYS['line']['token'])
+    for mid in mids:
+        user_id = re.sub(r'^u', 'U', mid)
+        line_bot_api.send_message(text, user_id)
 

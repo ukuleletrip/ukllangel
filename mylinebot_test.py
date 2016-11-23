@@ -20,6 +20,7 @@ from db import Drinking, Watch, User
 from datetime import datetime, timedelta
 from tzimpl import JST, UTC
 from time import sleep
+from linebotapi import WebhookRequest
 
 tz_jst = JST()
 tz_utc = UTC()
@@ -148,8 +149,24 @@ class MyLineBotTestCase(unittest.TestCase):
                 self.assertEqual(watch.sent_count, 1 if j <= i else 0)
 
             self.assertFalse(drinking.is_done)
-            content = { 'from' : test_id, 'text' : 'OK' }
-            receive_message(content)
+            content = { 
+                "events": [
+                    {
+                        "replyToken": "xxxx",
+                        "type": "message",
+                        "source": {
+                            "type": "user",
+                            "userId": test_id
+                        },
+                        "message": {
+                            "type": "text",
+                            "text": "OK"
+                        }
+                    }
+                ]
+            }
+            recv_req = WebhookRequest(json.dumps(content))
+            receive_message(recv_req)
             (status, info) = get_status(test_id)
             self.assertEqual(status, User.STAT_NONE)
             drinking = Drinking.get_key(test_id).get()
@@ -211,7 +228,7 @@ class MyLineBotTestCase(unittest.TestCase):
 
         watch_drinkings()
         (stat, info) = get_status(test_id, is_peek=True)
-        msg = handle_reply(test_id, u'帰宅した', info)
+        msg = handle_reply(u'帰宅した', info)
         self.assertTrue(msg.startswith(u'お疲れさまでした'), msg)
 
         drinking = Drinking.get_key(test_id).get()
@@ -246,7 +263,7 @@ class MyLineBotTestCase(unittest.TestCase):
         self.assertEqual(status, User.STAT_WAIT_RESULT)
 
         result = u'二日酔い'
-        msg = handle_result(test_id, result, info)
+        msg = handle_result(result, info)
 
         drinking = Drinking.get_key(test_id).get()
         self.assertEqual(drinking.result, result, drinking.result)
