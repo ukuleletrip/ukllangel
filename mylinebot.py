@@ -75,6 +75,11 @@ def generate_random_url(mid):
     
     return history_url
 
+def is_on_local_server():
+    return 'SERVER_SOFTWARE' not in os.environ or \
+        os.environ['SERVER_SOFTWARE'].find('testbed') >= 0
+
+
 def watch_drinkings():
     watches_to_send = {}
     now = utc_now()
@@ -297,6 +302,9 @@ def call_yahoo_jparser(msg):
     return BeautifulSoup(result.content.replace('\n',''), 'html.parser')
 
 def call_google_sentiment_analytics(msg):
+    if is_on_local_server():
+        return 0.0, 0.0
+
     credentials = GoogleCredentials.get_application_default()
     service = discovery.build('language', 'v1', credentials=credentials)
     service_request = service.documents().analyzeSentiment(
@@ -494,8 +502,7 @@ def handle_reply(text, watch_info):
         return None
 
 def reply_message(reply_token, text):
-    if 'SERVER_SOFTWARE' not in os.environ or \
-       os.environ['SERVER_SOFTWARE'].find('testbed') >= 0:
+    if is_on_local_server():
         # I'm not running on server
         return
 
