@@ -35,6 +35,8 @@ class Drinking(ndb.Model):
     finished_date = ndb.DateTimeProperty()
     result = ndb.StringProperty()
     watches = ndb.StructuredProperty(Watch, repeated=True)
+    sentiment = ndb.FloatProperty()
+    magnitude = ndb.FloatProperty()
 
     @staticmethod
     def get_key(key):

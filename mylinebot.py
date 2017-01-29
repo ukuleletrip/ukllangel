@@ -27,6 +27,9 @@ import os
 import uuid
 import jinja2
 from linebotapi import LineBotAPI, WebhookRequest
+from googleapiclient import discovery
+from oauth2client.client import GoogleCredentials
+
 
 JINJA_ENVIRONMENT = jinja2.Environment(
     loader=jinja2.FileSystemLoader(os.path.dirname(__file__)),
@@ -293,6 +296,21 @@ def call_yahoo_jparser(msg):
     logging.debug(result.content)
     return BeautifulSoup(result.content.replace('\n',''), 'html.parser')
 
+def call_google_sentiment_analytics(msg):
+    credentials = GoogleCredentials.get_application_default()
+    service = discovery.build('language', 'v1', credentials=credentials)
+    service_request = service.documents().analyzeSentiment(
+        body={
+            'document': {
+                'type': 'PLAIN_TEXT',
+                'language': 'ja-JP',
+                'content': msg
+            },
+            'encodingType': 'UTF8'
+        }
+    )
+    response = service_request.execute()
+    return response['documentSentiment']['score'], response['documentSentiment']['magnitude']
 
 def parse_message(msg):
     if type(msg) == unicode:
@@ -450,7 +468,10 @@ def handle_message(user_id, msg):
 def handle_result(text, info):
     drinking = Drinking.get_key(info['key']).get()
     if drinking:
+        (sentiment, magnitude) = call_google_sentiment_analytics(text)
         drinking.result = text
+        drinking.sentiment = sentiment
+        drinking.magnitude = magnitude
         drinking.put()
         return u'次回も大人飲みのお手伝いをします。またメッセージくださいね！'
     else:
