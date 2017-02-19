@@ -220,7 +220,14 @@ def get_drinking_history_content(history_url):
     template = JINJA_ENVIRONMENT.get_template('templates/index.html')
     return template.render(template_values)
 
+def get_worst_dinking(mid):
+    query = Drinking.query(Drinking.mid==mid, Drinking.is_done==True).order(Drinking.sentiment)
+    drinkings = query.fetch(1)
+    return drinkings[0] if len(drinkings) > 0 else None
+
 def history_drinking(mid):
+    worst_drinking = get_worst_dinking(mid)
+
     history_url = generate_random_url(mid)
     user = User.get_key(mid).get()
     if history_url is None or user is None:
@@ -230,8 +237,17 @@ def history_drinking(mid):
     user.history_expire = utc_now()+timedelta(minutes=5)
     user.put()
 
+    msg = ''
+    if worst_drinking:
+        msg += u'最悪の飲みは %s だったようです。\n' % \
+               (worst_drinking.start_date.
+                replace(tzinfo=tz_utc).astimezone(tz_jst).strftime('%Y-%m-%d'))
+        for kind in worst_drinking.summary:
+            msg += u'  %s %d 杯\n' % (kind, worst_drinking.summary[kind])
+        msg += '\n'
+
     url = service_url + '/history/' + history_url
-    return u'過去の飲みは %s を参照ください。このURLは%d分間有効です。' % (url, HISTORY_DURATION)
+    return msg + u'過去の飲みは %s を参照ください。このURLは%d分間有効です。' % (url, HISTORY_DURATION)
 
 def get_status(user_id, is_peek=False):
     mid = user_id
@@ -287,8 +303,8 @@ def depends_drink(id, elms, nomi_id):
     return False
 
         
-def call_yahoo_jparser(msg):
-    url = 'http://jlp.yahooapis.jp/DAService/V1/parse'
+def call_yahoo_jparser(msg, ptype):
+    url = 'http://jlp.yahooapis.jp/%sService/V1/parse' % (ptype)
 
     result = urlfetch.fetch(
         url=url,
@@ -300,6 +316,7 @@ def call_yahoo_jparser(msg):
 	)
     logging.debug(result.content)
     return BeautifulSoup(result.content.replace('\n',''), 'html.parser')
+
 
 def call_google_sentiment_analytics(msg):
     if is_on_local_server():
@@ -320,10 +337,45 @@ def call_google_sentiment_analytics(msg):
     response = service_request.execute()
     return response['documentSentiment']['score'], response['documentSentiment']['magnitude']
 
+def parse_drinking_amount(msg, amount=None):
+    msg = msg.translate({
+        ord(u'一'): u'1',
+        ord(u'二'): u'2',
+        ord(u'三'): u'3',
+        ord(u'四'): u'4',
+        ord(u'五'): u'5',
+        ord(u'六'): u'6',
+        ord(u'七'): u'7',
+        ord(u'八'): u'8',
+        ord(u'九'): u'9'
+    }) 
+    if type(msg) == unicode:
+        msg = unicodedata.normalize('NFKC', msg)
+    soup = call_yahoo_jparser(msg, 'MA')
+    elms = []
+    for word in soup.resultset.ma_result.word_list:
+        elms.append({ 'surface':word.surface.text,
+                      'pos'    :word.pos.text })
+
+    prev_noun = None
+    if amount is None:
+        amount = {}
+    for elm in elms:
+        if elm['pos'] == u'名詞':
+            if elm['surface'].isdigit():
+                if prev_noun:
+                    num = amount.get(prev_noun['surface'], 0)
+                    amount[prev_noun['surface']] = num + int(elm['surface'])
+                    prev_noun = None
+            else:
+                prev_noun = elm
+
+    return amount
+
 def parse_message(msg):
     if type(msg) == unicode:
         msg = unicodedata.normalize('NFKC', msg)
-    soup = call_yahoo_jparser(msg)
+    soup = call_yahoo_jparser(msg, 'DA')
 
     # 1st, create parsed dict with key=id
     elms = {}
@@ -489,13 +541,23 @@ def handle_reply(text, watch_info):
     drinking = Drinking.get_key(watch_info['key']).get()
     (elms, drink_id, cancel_id, finished_id, history_id) = parse_message(text)
     if drinking:
+        summary = parse_drinking_amount(text, drinking.summary)
         drinking.watches[watch_info['idx']].reply = text
         drinking.watches[watch_info['idx']].is_replied = True
+        drinking.summary = summary
+        if len(summary):
+            msg = u'これまで合計\n'
+            for kind in summary:
+                msg += u'%s %d杯\n' % (kind, summary[kind])
+            msg += u'飲みました！\n'
+        else:
+            msg = u''
+        
         if finished_id >= 0:
             # it is finished
-            msg = finish_the_drinkig(drinking)
+            msg += finish_the_drinkig(drinking)
         else:
-            msg = u'引き続き大人飲みでいきましょう！'
+            msg += u'引き続き大人飲みでいきましょう！'
             drinking.put()
         return msg
     else:

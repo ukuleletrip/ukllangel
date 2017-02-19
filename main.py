@@ -18,6 +18,7 @@ import webapp2
 import os
 
 from mylinebot_handler import BotCallbackHandler, WatchingHandler, ReqResultHandler, HistoryHandler
+from mytest import TestHandler
 
 class MainHandler(webapp2.RequestHandler):
     def get(self):
@@ -26,6 +27,7 @@ class MainHandler(webapp2.RequestHandler):
 app = webapp2.WSGIApplication([
     ('/admin/watching', WatchingHandler),
     ('/admin/reqresult', ReqResultHandler),
+#    ('/admin/test', TestHandler),
     ('/callback', BotCallbackHandler),
     ('/history/.*', HistoryHandler),
     ('/', MainHandler)
