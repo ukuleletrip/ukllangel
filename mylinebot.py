@@ -247,8 +247,8 @@ def history_drinking(mid):
     msg = ''
     if worst_drinking:
         msg += u'最悪の飲みは %s だったようです。\n' % \
-               (worst_drinking.start_date.
-                replace(tzinfo=tz_utc).astimezone(tz_jst).strftime('%Y-%m-%d'))
+               (format_jdate(worst_drinking.start_date.
+                             replace(tzinfo=tz_utc).astimezone(tz_jst)))
         for kind in worst_drinking.summary:
             msg += u'  %s %d 杯\n' % (kind, worst_drinking.summary[kind])
         msg += '\n'
