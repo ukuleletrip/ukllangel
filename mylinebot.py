@@ -200,6 +200,11 @@ def get_drinking_history_content(history_url):
     if len(users) == 0:
         return None
 
+    # check it is still valid
+    if users[0].history_expire < utc_now():
+        # expired
+        return None
+
     drinkings = get_drinking_history(users[0].key.id())
     t_drinkings = []
     for drinking in drinkings:
@@ -241,7 +246,7 @@ def history_drinking(mid):
         return u'まだ飲みの登録がないか、参照が行えません'
 
     user.history_url = history_url
-    user.history_expire = utc_now()+timedelta(minutes=5)
+    user.history_expire = utc_now()+timedelta(minutes=HISTORY_DURATION)
     user.put()
 
     msg = ''
