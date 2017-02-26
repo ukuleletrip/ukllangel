@@ -267,6 +267,8 @@ class MyLineBotTestCase(unittest.TestCase):
 
         drinking = Drinking.get_key(test_id).get()
         self.assertEqual(drinking.result, result, drinking.result)
+        self.assertEqual(drinking.sentiment, 0.0)
+        self.assertEqual(drinking.magnitude, 0.0)
         self.assertTrue(msg.find(u'次回も大人飲み') >= 0, msg)
 
 

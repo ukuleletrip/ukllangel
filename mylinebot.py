@@ -79,6 +79,13 @@ def is_on_local_server():
     return 'SERVER_SOFTWARE' not in os.environ or \
         os.environ['SERVER_SOFTWARE'].find('testbed') >= 0
 
+def get_drinking_quality_word(sentiment, magnitude):
+    if sentiment < -0.1:
+        return u'飲みすぎたようですね。'
+    elif sentiment < 0.1:
+        return u'少し飲みすぎたようですね。'
+    else:
+        return u'大人飲みできたようですね。'
 
 def watch_drinkings():
     watches_to_send = {}
@@ -182,10 +189,10 @@ def finish_drinking(mid):
     # finish the drinking
     return finish_the_drinkig(drinkings[0])
 
-def get_drinking_history(mid):
+def get_drinking_history(mid, num=MAX_HISTORY):
     dt = utc_now().replace(hour=0, minute=0, second=0, microsecond=0)
     query = Drinking.query(Drinking.mid==mid, Drinking.start_date<dt).order(-Drinking.start_date)
-    return query.fetch(MAX_HISTORY)
+    return query.fetch(num)
 
 def get_drinking_history_content(history_url):
     query = User.query(User.history_url==history_url)
@@ -523,7 +530,21 @@ def handle_message(user_id, msg):
                         watches=watches)
     drinking.put()
 
-    return s_date_str + u'から飲むのですね！\n約%d分毎に%d回メッセージを送信しますので、何を何杯飲んだかなど、状況を返信してくださいね。帰宅したら帰宅とメッセージしてください。' % (WATCH_INTERVAL, WATCH_COUNTS)
+    msg = s_date_str + u'から飲むのですね！\n約%d分毎に%d回メッセージを送信しますので、何を何杯飲んだかなど、状況を返信してくださいね。帰宅したら帰宅とメッセージしてください。' % (WATCH_INTERVAL, WATCH_COUNTS)
+
+    # past drinkings
+    query = Drinking.query(Drinking.mid==mid, Drinking.is_done==True).order(-Drinking.start_date)
+    prev_drinkings = query.fetch(1)
+    if len(prev_drinkings):
+        prev_drinking = prev_drinkings[0]
+        msg += u'\n\nちなみに前回の飲みは%sで、その時は%s\n' % (format_jdate(prev_drinking.start_date.
+                                                                        replace(tzinfo=tz_utc).astimezone(tz_jst)), get_drinking_quality_word(prev_drinking.sentiment, prev_drinking.magnitude))
+        sep = u''
+        for kind in prev_drinking.summary:
+            msg += sep + u'   %s %d 杯' % (kind, prev_drinking.summary[kind])
+            sep = u'\n'
+
+    return msg
 
 def handle_result(text, info):
     drinking = Drinking.get_key(info['key']).get()
@@ -533,7 +554,9 @@ def handle_result(text, info):
         drinking.sentiment = sentiment
         drinking.magnitude = magnitude
         drinking.put()
-        return u'次回も大人飲みのお手伝いをします。またメッセージくださいね！'
+        msg = u'昨日は' + get_drinking_quality_word(sentiment, magnitude) + \
+              u'\n次回も大人飲みのお手伝いをします。またメッセージくださいね！'
+        return msg
     else:
         return None
 

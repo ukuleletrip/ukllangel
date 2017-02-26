@@ -22,7 +22,7 @@ class WebhookRequest(object):
         return self.recv_msg['type'] == 'message' and \
             self.recv_msg['message']['type'] == 'text'
 
-    def is_follow(self):
+    def is_follow_event(self):
         return self.recv_msg['type'] == 'follow'
 
     def get_message(self):
