@@ -18,12 +18,10 @@ from google.appengine.ext import testbed
 from mylinebot import *
 from db import Drinking, Watch, User
 from datetime import datetime, timedelta
-from tzimpl import JST, UTC
 from time import sleep
 from linebotapi import WebhookRequest
-
-tz_jst = JST()
-tz_utc = UTC()
+import json
+from gaeutil import *
 
 class MyLineBotTestCase(unittest.TestCase):
     def setUp(self):
@@ -166,7 +164,7 @@ class MyLineBotTestCase(unittest.TestCase):
                 ]
             }
             recv_req = WebhookRequest(json.dumps(content))
-            receive_message(recv_req)
+            handle_message_event(recv_req)
             (status, info) = get_status(test_id)
             self.assertEqual(status, User.STAT_NONE)
             drinking = Drinking.get_key(test_id).get()
@@ -336,7 +334,7 @@ class MyLineBotTestCase(unittest.TestCase):
                                 start_date=sdt,
                                 watches=watches)
             drinking.put()
-            check_sdt.append(format_jdate(sdt.replace(tzinfo=tz_utc).astimezone(tz_jst)))
+            check_sdt.append(format_jdate(utc_to_jst(sdt)))
             sdt = sdt+timedelta(days=-1)
 
             

@@ -12,16 +12,10 @@ __author__ = 'ukuleletrip@gmail.com (Ukulele Trip)'
 
 import sys
 sys.path.insert(0, 'libs')
-from bs4 import BeautifulSoup
-from google.appengine.api import urlfetch
-from urllib import urlencode
-import json
 import logging
 from appkeys import APP_KEYS
 import re
-import unicodedata
 from datetime import datetime, timedelta
-from tzimpl import JST, UTC
 from db import User, Watch, Drinking
 import os
 import uuid
@@ -29,6 +23,8 @@ import jinja2
 from linebotapi import LineBotAPI, WebhookRequest
 from googleapiclient import discovery
 from oauth2client.client import GoogleCredentials
+from gaeutil import *
+from message import Message
 
 
 JINJA_ENVIRONMENT = jinja2.Environment(
@@ -44,16 +40,10 @@ RESULT_TIMEOUT = 12*60   # 12 hour
 HISTORY_DURATION = 30
 MAX_HISTORY = 20
 
-tz_jst = JST()
-tz_utc = UTC()
-
 service_url = 'https://ukllangel.appspot.com'
 
 usage = u'大人飲みのお手伝いをします！使い方は %s/help を参照してください。' % (service_url)
 welcome = usage
-
-def utc_now():
-    return datetime.now(tz=tz_utc).replace(tzinfo=None)
 
 def format_jdate(dt):
     weekday = (u'月',u'火',u'水',u'木',u'金',u'土',u'日')
@@ -74,10 +64,6 @@ def generate_random_url(mid):
         return None
     
     return history_url
-
-def is_on_local_server():
-    return 'SERVER_SOFTWARE' not in os.environ or \
-        os.environ['SERVER_SOFTWARE'].find('testbed') >= 0
 
 def get_drinking_quality_word(sentiment, magnitude):
     if sentiment < -0.1:
@@ -209,18 +195,15 @@ def get_drinking_history_content(history_url):
     t_drinkings = []
     for drinking in drinkings:
         t_drinking = {}
-        t_drinking['started'] = format_jdate(drinking.start_date.
-                                             replace(tzinfo=tz_utc).astimezone(tz_jst))
-        t_drinking['finished'] = drinking.finished_date. \
-                                 replace(tzinfo=tz_utc).astimezone(tz_jst).strftime('%H:%M') \
+        t_drinking['started'] = format_jdate(utc_to_jst(drinking.start_date))
+        t_drinking['finished'] = utc_to_jst(drinking.finished_date).strftime('%H:%M') \
                                  if drinking.finished_date else u''
         t_drinking['result'] = drinking.result if drinking.result else u''
         t_drinking['watches'] = []
         for watch in drinking.watches:
             if watch.sent_count > 0:
                 t_watch = {}
-                t_watch['date'] = watch.date. \
-                                  replace(tzinfo=tz_utc).astimezone(tz_jst).strftime('%H:%M')
+                t_watch['date'] = utc_to_jst(watch.date).strftime('%H:%M')
                 t_watch['sent_count'] = watch.sent_count
                 t_watch['reply'] = watch.reply if watch.reply else u'返信なし'
                 t_drinking['watches'].append(t_watch)
@@ -252,8 +235,7 @@ def history_drinking(mid):
     msg = ''
     if worst_drinking:
         msg += u'最悪の飲みは %s だったようです。\n' % \
-               (format_jdate(worst_drinking.start_date.
-                             replace(tzinfo=tz_utc).astimezone(tz_jst)))
+               (format_jdate(utc_to_jst(worst_drinking.start_date)))
         for kind in worst_drinking.summary:
             msg += u'  %s %d 杯\n' % (kind, worst_drinking.summary[kind])
         msg += '\n'
@@ -282,7 +264,7 @@ def get_status(user_id, is_peek=False):
 
         return (status, info)
 
-def receive_message(recv_req):
+def handle_message_event(recv_req):
     user_id = recv_req.get_user_id()
     reply_token = recv_req.get_reply_token()
     (status, info) = get_status(user_id)
@@ -302,33 +284,9 @@ def receive_message(recv_req):
     if msg:
         reply_message(reply_token, msg)
 
-def receive_follow(recv_req):
+def handle_follow_event(recv_req):
     # add as friend
     reply_message(recv_req.get_reply_token(), welcome)
-
-def depends_drink(id, elms, nomi_id):
-    elm = elms[id]
-    while elm['dependency'] >= 0:
-        if elm['dependency'] == nomi_id:
-            return True
-        elm = elms[elm['dependency']]
-    return False
-
-        
-def call_yahoo_jparser(msg, ptype):
-    url = 'http://jlp.yahooapis.jp/%sService/V1/parse' % (ptype)
-
-    result = urlfetch.fetch(
-        url=url,
-	method=urlfetch.POST, 
-	headers={'Content-Type':'application/x-www-form-urlencoded'},
-	payload=urlencode({
-	    'appid'    : APP_KEYS['yahoo']['id'],
-	    'sentence' : msg.encode('utf-8')})
-	)
-    logging.debug(result.content)
-    return BeautifulSoup(result.content.replace('\n',''), 'html.parser')
-
 
 def call_google_sentiment_analytics(msg):
     if is_on_local_server():
@@ -349,174 +307,33 @@ def call_google_sentiment_analytics(msg):
     response = service_request.execute()
     return response['documentSentiment']['score'], response['documentSentiment']['magnitude']
 
-def parse_drinking_amount(msg, amount=None):
-    msg = msg.translate({
-        ord(u'一'): u'1',
-        ord(u'二'): u'2',
-        ord(u'三'): u'3',
-        ord(u'四'): u'4',
-        ord(u'五'): u'5',
-        ord(u'六'): u'6',
-        ord(u'七'): u'7',
-        ord(u'八'): u'8',
-        ord(u'九'): u'9'
-    }) 
-    if type(msg) == unicode:
-        msg = unicodedata.normalize('NFKC', msg)
-    soup = call_yahoo_jparser(msg, 'MA')
-    elms = []
-    for word in soup.resultset.ma_result.word_list:
-        elms.append({ 'surface':word.surface.text,
-                      'pos'    :word.pos.text })
-
-    prev_noun = None
-    if amount is None:
-        amount = {}
-    for elm in elms:
-        if elm['pos'] == u'名詞':
-            if elm['surface'].isdigit():
-                if prev_noun:
-                    num = amount.get(prev_noun['surface'], 0)
-                    amount[prev_noun['surface']] = num + int(elm['surface'])
-                    prev_noun = None
-            else:
-                prev_noun = elm
-
-    return amount
-
-def parse_message(msg):
-    if type(msg) == unicode:
-        msg = unicodedata.normalize('NFKC', msg)
-    soup = call_yahoo_jparser(msg, 'DA')
-
-    # 1st, create parsed dict with key=id
-    elms = {}
-    for chunk in soup.resultset.result.chunklist:
-        elm = {}
-        elms[int(chunk.id.text)] = elm
-        elm['dependency'] = int(chunk.dependency.text)
-        elm['morphemlist'] = []
-        for morphem in chunk.morphemlist:
-            elm['morphemlist'].append({ 'surface':morphem.surface.text,
-                                        'pos'    :morphem.pos.text })
-
-    # 2nd, find drink or cancel morphem
-    drink_id = -1
-    cancel_id = -1
-    finished_id = -1
-    history_id = -1
-    # I'm not sure that I have to use Yahoo API...
-    # I just wanted to use that !!!
-    for id, elm in elms.items():
-        for morphem in elm['morphemlist']:
-            if morphem['pos'] == u'動詞' or morphem['pos'] == u'名詞' or morphem['pos'] == u'副詞':
-                mo = re.search(u'(飲|呑|の)(み|む)', morphem['surface'])
-                if mo:
-                    drink_id = id
-                    break
-                elif morphem['surface'].find(u'やめ') >= 0:
-                    cancel_id = id
-                    break
-                elif (morphem['surface'].find(u'終') >= 0 or
-                      morphem['surface'].find(u'帰') >= 0):
-                    finished_id = id
-                    break
-                elif (morphem['surface'].find(u'過去') >= 0 or
-                      morphem['surface'].find(u'前') >= 0):
-                    history_id = id
-                    # do not break with history morphem
-                else:
-                    mo = re.search(u'(今|これ)まで', morphem['surface'])
-                    if mo:
-                        history_id = id
-                        # do not break with history morphem
-        else:
-            continue
-        break
-
-    return (elms, drink_id, cancel_id, finished_id, history_id)
 
 def handle_message(user_id, msg):
     mid = user_id
-    (elms, drink_id, cancel_id, finished_id, history_id) = parse_message(msg)
+    message = Message(msg)
 
-    if history_id >= 0 and drink_id >= 0 and depends_drink(history_id, elms, drink_id):
-        # this is request for drinking history
+    if message.type == Message.REQUEST_HISTORY:
         return history_drinking(mid)
-
-    if finished_id >= 0:
-        # this is finish message
+    elif message.type == Message.FINISH_DRINKING:
         return finish_drinking(mid)
-
-    if cancel_id >= 0:
-        # this is cancel message
+    elif message.type == Message.CANCEL_DRINKING:
         return cancel_drinking(mid)
-
-    if drink_id == -1:
-        # this is not nomi message...
+    elif message.type == Message.NO_MEANING:
         return None
-
+    
     # user can have only one drink
     if has_drinking(mid):
         return u'飲みは1つしか予約できません。予約した飲みをキャンセルするには「やめ」とメッセージしてください。'
 
-    # 3rd, determine date and time
-    now = utc_now().replace(second=0, microsecond=0)
-    s_date = datetime.now(tz=tz_jst).replace(second=0, microsecond=0)
-    for id, elm in elms.items():
-        if depends_drink(id, elms, drink_id):
-            start_info = ''
-            for morphem in elm['morphemlist']:
-                start_info += morphem['surface']
-
-            # find time
-            time_patterns = [
-                u'(\d\d)[時じ:：](\d\d)\D',
-                '(\d\d)(\d\d)',
-                u'(\d+)[時じ:：](\d+)',
-                u'(\d+)[時じ]'
-            ]     
-            for pattern in time_patterns:
-                mo = re.search(pattern, start_info)
-                if mo:
-                    hour = int(mo.group(1))
-                    minute = int(mo.group(2)) if mo.lastindex == 2 else 0
-                    if hour < 12 and \
-                       (start_info.find('PM') >= 0 or
-                        start_info.find('pm') >= 0 or
-                        start_info.find(u'午後') >= 0 or
-                        start_info.find(u'ごご') >= 0):
-                        hour += 12
-                    s_date = s_date.replace(hour=hour, minute=minute)
-                    break
-
-            # find date
-            if start_info.find(u'明日') >= 0 or \
-               start_info.find(u'あした') >= 0 or \
-               start_info.find(u'あす') >= 0:
-                s_date = s_date + timedelta(days=1)
-            elif start_info.find(u'明後日') >= 0 or \
-                 start_info.find(u'あさって') >= 0:
-                s_date = s_date + timedelta(days=2)
-            else:
-                date_patterns = [
-                    u'(\d+)月(\d+)',
-                    '(\d+)/(\d+)'
-                ]
-                for pattern in date_patterns:
-                    mo = re.search(pattern, start_info)
-                    if mo:
-                        month = int(mo.group(1))
-                        day = int(mo.group(2))
-                        s_date = s_date.replace(month=month, day=day)
-                        break
+    s_date = message.param
 
     # store data
     watches = []
-    utc_s_date = s_date.astimezone(tz_utc).replace(tzinfo=None)
+    utc_s_date = jst_to_utc(message.param).replace(tzinfo=None)
     s_date_str = u'%d月%d日%d時%d分' % (s_date.month, s_date.day, s_date.hour, s_date.minute)
 
     # check if s_date is valid
+    now = just_minute(utc_now())
     if utc_s_date < now:
         # past date !!
         return s_date_str + u'は過去です。'
@@ -542,8 +359,9 @@ def handle_message(user_id, msg):
     prev_drinkings = query.fetch(1)
     if len(prev_drinkings):
         prev_drinking = prev_drinkings[0]
-        msg += u'\n\nちなみに前回の飲みは%sで、その時は%s\n' % (format_jdate(prev_drinking.start_date.
-                                                                        replace(tzinfo=tz_utc).astimezone(tz_jst)), get_drinking_quality_word(prev_drinking.sentiment, prev_drinking.magnitude))
+        msg += u'\n\nちなみに前回の飲みは%sで、その時は%s\n' % \
+               (format_jdate(utc_to_jst(prev_drinking.start_date)),
+                get_drinking_quality_word(prev_drinking.sentiment, prev_drinking.magnitude))
         sep = u''
         for kind in prev_drinking.summary:
             msg += sep + u'   %s %d 杯' % (kind, prev_drinking.summary[kind])
@@ -567,9 +385,9 @@ def handle_result(text, info):
 
 def handle_reply(text, watch_info):
     drinking = Drinking.get_key(watch_info['key']).get()
-    (elms, drink_id, cancel_id, finished_id, history_id) = parse_message(text)
+    message = Message(text)
     if drinking:
-        summary = parse_drinking_amount(text, drinking.summary)
+        summary = message.parse_drinking_amount(drinking.summary)
         drinking.watches[watch_info['idx']].reply = text
         drinking.watches[watch_info['idx']].is_replied = True
         drinking.summary = summary
@@ -581,7 +399,7 @@ def handle_reply(text, watch_info):
         else:
             msg = u''
         
-        if finished_id >= 0:
+        if message.type == Message.FINISH_DRINKING:
             # it is finished
             msg += finish_the_drinkig(drinking)
         else:
